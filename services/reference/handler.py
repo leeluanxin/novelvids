@@ -1,18 +1,137 @@
 
+import asyncio
+import json
 import logging
 import os
+from asyncio.subprocess import PIPE
 from urllib.parse import urlparse
 
+import anyio
 import httpx
 from openai import AsyncOpenAI
 
 from config import settings
 from models.asset import Asset
 from services.ai_task_executor import BaseTaskHandler
-from services.reference.generator import generate_for_sora_consistency
+from services.reference.generator import (
+    build_sora_compatible_prompt,
+    generate_for_sora_consistency,
+)
 from utils.enums import AssetTypeEnum, ImageSourceEnum
 
 logger = logging.getLogger(__name__)
+
+
+async def _read_stream(stream) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = await stream.receive()
+        except anyio.EndOfStream:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _extract_image_urls(output: object) -> list[str]:
+    if isinstance(output, str) and output:
+        return [output]
+
+    if isinstance(output, list):
+        urls: list[str] = []
+        for item in output:
+            urls.extend(_extract_image_urls(item))
+        return urls
+
+    if isinstance(output, dict):
+        urls: list[str] = []
+
+        for key in ("image_url", "url"):
+            value = output.get(key)
+            if isinstance(value, str) and value:
+                urls.append(value)
+
+        for key in ("images", "image_urls", "result_urls", "videos", "video_urls"):
+            value = output.get(key)
+            if isinstance(value, list):
+                urls.extend(_extract_image_urls(value))
+
+        for key in ("result", "result_json", "data"):
+            value = output.get(key)
+            if value is not None:
+                urls.extend(_extract_image_urls(value))
+
+        deduped_urls: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                deduped_urls.append(url)
+        return deduped_urls
+
+    return []
+
+
+async def _run_cli_image_generation(
+    cli_command: str,
+    payload: dict,
+) -> list[str]:
+    prompt = payload["prompt"]
+    model = str(payload.get("model") or "").strip()
+
+    command = [
+        cli_command,
+        "text2image",
+        f"--prompt={prompt}",
+        "--ratio=1:1",
+        "--resolution_type=2k",
+        "--poll=120",
+    ]
+    if model and model != "dreamina":
+        command.append(f"--model_version={model}")
+
+    process = await anyio.open_process(
+        command,
+        stdin=PIPE,
+        stdout=PIPE,
+        stderr=PIPE,
+    )
+
+    await process.stdin.aclose()
+
+    stdout, stderr = await asyncio.gather(
+        _read_stream(process.stdout),
+        _read_stream(process.stderr),
+    )
+
+    await process.wait()
+
+    stderr_text = stderr.decode("utf-8", errors="ignore").strip()
+    stdout_text = stdout.decode("utf-8", errors="ignore").strip()
+
+    if process.returncode != 0:
+        raise Exception(stderr_text or stdout_text or f"CLI image generation failed with exit code {process.returncode}")
+
+    if not stdout_text:
+        raise Exception("CLI image generation returned empty output")
+
+    try:
+        output = json.loads(stdout_text)
+    except json.JSONDecodeError as exc:
+        preview = stdout_text[:500]
+        if stderr_text:
+            raise Exception(
+                f"CLI image generation returned invalid JSON. stdout={preview!r}; stderr={stderr_text[:500]!r}"
+            ) from exc
+        raise Exception(f"CLI image generation returned invalid JSON. stdout={preview!r}") from exc
+
+    image_urls = _extract_image_urls(output)
+    if not image_urls:
+        raise Exception(f"CLI image generation did not return a valid images list: {stdout_text[:500]!r}")
+
+    return image_urls
 
 
 async def _download_image(remote_url: str, asset_id: int, suffix: str = "") -> str:
@@ -56,18 +175,21 @@ class AssetReferenceHandler(BaseTaskHandler):
         """
         request_params:
             asset_id: int
-            base_url: str
-            api_key: str
+            invocation_type: str
+            cli_command: str | None
+            base_url: str | None
+            api_key: str | None
             model: str
         """
         asset_id = request_params["asset_id"]
-        base_url = request_params["base_url"]
-        api_key = request_params["api_key"]
+        invocation_type = request_params.get("invocation_type", "api")
+        cli_command = request_params.get("cli_command")
+        base_url = request_params.get("base_url")
+        api_key = request_params.get("api_key")
         model = request_params["model"]
 
         asset = await Asset.get(id=asset_id)
 
-        # 构造生成所需的数据
         try:
             asset_type_enum = AssetTypeEnum(asset.asset_type)
             asset_type_name = asset_type_enum.name
@@ -88,17 +210,27 @@ class AssetReferenceHandler(BaseTaskHandler):
             "description": asset.description,
         }
 
-        # 初始化客户端 (AsyncOpenAI)
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-
         try:
-            image_list = await generate_for_sora_consistency(client, data, model=model)
+            if invocation_type == "cli":
+                if not cli_command:
+                    raise Exception("CLI image generation requires cli_command")
+
+                image_urls = await _run_cli_image_generation(
+                    cli_command,
+                    {
+                        "model": model,
+                        "prompt": build_sora_compatible_prompt(data),
+                        "asset_id": asset_id,
+                    },
+                )
+            else:
+                client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+                image_list = await generate_for_sora_consistency(client, data, model=model)
+                image_urls = [image.url for image in image_list if getattr(image, "url", None)]
 
             result_urls = []
-            if image_list:
-                # 下载第一张图作为主图
-                first_image = image_list[0]
-                local_url = await _download_image(first_image.url, asset_id)
+            if image_urls:
+                local_url = await _download_image(image_urls[0], asset_id)
                 asset.main_image = local_url
                 asset.image_source = ImageSourceEnum.ai.value
 
@@ -106,10 +238,9 @@ class AssetReferenceHandler(BaseTaskHandler):
 
                 result_urls = [local_url]
 
-                # 如果有多张图，下载后续角度图
-                for i, img in enumerate(image_list[1:3], start=1):
+                for i, image_url in enumerate(image_urls[1:3], start=1):
                     try:
-                        angle_url = await _download_image(img.url, asset_id, f"_angle{i}")
+                        angle_url = await _download_image(image_url, asset_id, f"_angle{i}")
                         field_name = f"angle_image_{i}"
                         setattr(asset, field_name, angle_url)
                         await asset.save(update_fields=[field_name, "updated_at"])

@@ -1,5 +1,10 @@
+import base64
+import os
+
 import pytest
 from unittest.mock import AsyncMock, patch
+
+from config import settings
 from fastapi import HTTPException
 
 from controllers.video import video_controller
@@ -10,6 +15,7 @@ from models.asset import Asset
 from models.video import Video
 from models.config import AiModelConfig
 from schemas.video import VideoGenerateRequest
+from services.video import get_generator
 from utils.enums import (
     AiTaskTypeEnum,
     AssetTypeEnum,
@@ -254,6 +260,149 @@ async def test_查询视频状态_失败():
 
     assert result.status == TaskStatusEnum.failed.value
     print(f"    查询失败: status={result.status}")
+
+
+@pytest.mark.asyncio
+async def test_CLI配置_Seedance提交成功():
+    novel = await Novel.create(name="CLI Seedance Novel", author="Author")
+    chapter = await Chapter.create(novel=novel, number=1, name="第1章", content="内容")
+    scene = await Scene.create(chapter=chapter, sequence=1, prompt="测试提示词", duration=6.0)
+
+    await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance-t2v",
+        is_active=True,
+    )
+
+    req = VideoGenerateRequest(
+        scene_id=scene.id,
+        model_type=VideoModelTypeEnum.seedance.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "cli-task-001"
+        mock_factory.return_value = mock_gen
+
+        video = await video_controller.generate(req)
+
+    assert video.external_task_id == "cli-task-001"
+    assert video.model_type == VideoModelTypeEnum.seedance.value
+    assert video.status == TaskStatusEnum.pending.value
+
+
+@pytest.mark.asyncio
+async def test_CLI配置_非Seedance模型直接报错():
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance-t2v",
+        is_active=True,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        get_generator(VideoModelTypeEnum.sora2.value, config)
+
+    assert "仅支持 Seedance" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_CLI查询状态_完成并返回URL():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="cli-task-002",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/cli-video.mp4",
+            "metadata": {"raw_status": "success"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+
+        result = await video_controller.query_status(video.id)
+
+    assert result.status == TaskStatusEnum.completed.value
+    assert result.url == f"/media/videos/{video.id}.mp4"
+    mock_dl.assert_called_once_with("https://cdn.example.com/cli-video.mp4", video.id)
+
+
+@pytest.mark.asyncio
+async def test_CLI查询命令_使用query_result和submit_id():
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance2.0",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {
+            "status": "success",
+            "video_url": "https://cdn.example.com/query-result.mp4",
+        }
+
+        result = await generator.query("submit-123")
+
+    mock_run.assert_awaited_once_with("dreamina", ["query_result", "--submit_id=submit-123"])
+    assert result["status"] == TaskStatusEnum.completed.value
+    assert result["url"] == "https://cdn.example.com/query-result.mp4"
+
+
+@pytest.mark.asyncio
+async def test_CLI提交_本地参考图改走临时文件避免参数过长(tmp_path):
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance2.0",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    image_bytes = b"fake-image-bytes"
+    data_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {"task_id": "cli-task-003"}
+
+        task_id = await generator.submit(
+            prompt="@张三 走向镜头",
+            subjects=[{"name": "张三", "images": [data_url], "description": "角色描述"}],
+            duration=6.0,
+        )
+
+    assert task_id == "cli-task-003"
+    call_args = mock_run.await_args.args
+    assert call_args[0] == "dreamina"
+    args = call_args[1]
+    assert args[0] == "multimodal2video"
+    image_arg = next(arg for arg in args if arg.startswith("--image="))
+    assert "data:image" not in image_arg
+    local_image_path = image_arg.split("=", 1)[1]
+    assert os.path.dirname(local_image_path) == os.path.abspath(settings.MEDIA_PATH)
+    assert not os.path.exists(local_image_path)
 
 
 # =====================================================================

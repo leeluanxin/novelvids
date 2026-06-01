@@ -37,7 +37,7 @@ interface StepAssetsProps {
 
 async function pollTask(taskId: string): Promise<AiTask> {
   while (true) {
-    await sleep(3000)
+    await sleep(10000)
     const res = await api.getTask(taskId)
     const t = res.data
     if (

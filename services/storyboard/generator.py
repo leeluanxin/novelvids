@@ -1,5 +1,6 @@
+import json
 from typing import List
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from schemas.scene import SceneEntity, Storyboard
 
@@ -63,42 +64,101 @@ You must act like a film director using professional equipment. Fill the specifi
 Generate the storyboard now.
 """
 
-    completion = await client.beta.chat.completions.parse(
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    def build_metadata(completion) -> dict:
+        metadata = {
+            "model": completion.model,
+            "response_id": completion.id,
+            "created": completion.created,
+            "system_fingerprint": getattr(completion, "system_fingerprint", None),
+        }
+
+        if hasattr(completion, "usage") and completion.usage:
+            usage = completion.usage
+            metadata["usage"] = {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+            }
+
+            if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+                metadata["usage"]["prompt_tokens_details"] = usage.prompt_tokens_details.model_dump()
+            if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
+                metadata["usage"]["completion_tokens_details"] = usage.completion_tokens_details.model_dump()
+
+        if hasattr(completion.choices[0].message, "refusal") and completion.choices[0].message.refusal:
+            metadata["refusal"] = completion.choices[0].message.refusal
+
+        return metadata
+
+    try:
+        completion = await client.beta.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=Storyboard,
+            timeout=600,
+            max_completion_tokens=10000,
+        )
+        return completion.choices[0].message.parsed, build_metadata(completion)
+    except BadRequestError as exc:
+        error_message = str(exc)
+        if "response_format" not in error_message and "response_format type is unavailable" not in error_message:
+            raise
+
+    fallback_user_prompt = f"""
+### NARRATIVE TEXT TO PROCESS
+\"\"\"
+{long_text}
+\"\"\"
+
+Generate the storyboard now.
+
+Return JSON only. Do not wrap in markdown fences.
+The JSON must match this schema exactly:
+{{
+  "shots": [
+    {{
+      "sequence": 1,
+      "description": "...",
+      "duration": "4s",
+      "visual_prose": "...",
+      "actions": ["0.0s-2.0s: ..."],
+      "format_and_look": "...",
+      "lenses_and_filtration": "...",
+      "lighting_and_atmosphere": "...",
+      "grade_and_palette": "...",
+      "camera_movement": "...",
+      "sound_design": "..."
+    }}
+  ]
+}}
+"""
+
+    completion = await client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": fallback_user_prompt},
         ],
-        response_format=Storyboard,
         timeout=600,
-        max_completion_tokens=10000  # o1 系列需要这个参数来增加输出长度
+        max_completion_tokens=10000,
     )
 
-    # 收集元数据
-    metadata = {
-        "model": completion.model,
-        "response_id": completion.id,
-        "created": completion.created,
-        "system_fingerprint": getattr(completion, 'system_fingerprint', None),
-    }
+    content = completion.choices[0].message.content or ""
+    if not content:
+        raise ValueError("Storyboard model returned empty content")
 
-    # 添加 token 使用情况
-    if hasattr(completion, 'usage') and completion.usage:
-        usage = completion.usage
-        metadata["usage"] = {
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "total_tokens": usage.total_tokens,
-        }
+    try:
+        storyboard = Storyboard.model_validate_json(content)
+    except Exception:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            raise
+        storyboard = Storyboard.model_validate(json.loads(content[start:end + 1]))
 
-        # 详细的 token 使用信息（如果有）
-        if hasattr(usage, 'prompt_tokens_details') and usage.prompt_tokens_details:
-            metadata["usage"]["prompt_tokens_details"] = usage.prompt_tokens_details.model_dump()
-        if hasattr(usage, 'completion_tokens_details') and usage.completion_tokens_details:
-            metadata["usage"]["completion_tokens_details"] = usage.completion_tokens_details.model_dump()
-
-    # 检查是否有拒绝信息
-    if hasattr(completion.choices[0].message, 'refusal') and completion.choices[0].message.refusal:
-        metadata["refusal"] = completion.choices[0].message.refusal
-
-    return completion.choices[0].message.parsed, metadata
+    return storyboard, build_metadata(completion)

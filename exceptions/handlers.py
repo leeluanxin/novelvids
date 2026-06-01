@@ -1,6 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from tortoise.exceptions import (
     DoesNotExist,
@@ -9,6 +10,14 @@ from tortoise.exceptions import (
 )
 
 from utils.response_format import ResponseSchema
+
+
+def _build_validation_message(errors: list[dict]) -> str:
+    error_messages = []
+    for error in errors:
+        field = ".".join(str(loc) for loc in error["loc"] if loc != "body")
+        error_messages.append(f"{field}: {error['msg']}")
+    return "; ".join(error_messages)
 
 
 # 捕获 HTTPException (比如 404, 401)
@@ -23,17 +32,19 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 # 捕获 FastAPI 422 验证错误
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    error_messages = []
-    for error in exc.errors():
-        field = ".".join(str(loc) for loc in error["loc"] if loc != "body")
-        error_messages.append(f"{field}: {error['msg']}")
-
-    message = "; ".join(error_messages)
-
     response_data = ResponseSchema(
         code=422,
         data=None,
-        message=message,
+        message=_build_validation_message(exc.errors()),
+    )
+    return JSONResponse(status_code=200, content=response_data.model_dump())
+
+
+async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
+    response_data = ResponseSchema(
+        code=422,
+        data=None,
+        message=_build_validation_message(exc.errors()),
     )
     return JSONResponse(status_code=200, content=response_data.model_dump())
 

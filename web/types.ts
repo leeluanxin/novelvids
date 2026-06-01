@@ -20,6 +20,8 @@ export enum VideoModelTypeEnum {
   VEO_3 = 4,
 }
 
+export type InvocationType = 'api' | 'cli'
+
 export interface Novel {
   id: number;
   name: string;
@@ -119,9 +121,11 @@ export interface AiModelConfig {
   id: number;
   task_type: number;
   name: string;
+  invocation_type: InvocationType;
   base_url?: string;
   api_key?: string;
   model?: string;
+  cli_command?: string;
   is_active: boolean;
   concurrency: number;
   created_at: string;

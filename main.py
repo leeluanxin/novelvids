@@ -2,6 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 from tortoise.contrib.fastapi import register_tortoise
@@ -17,13 +18,17 @@ from exceptions.handlers import (
     http_exception_handler,
     global_exception_handler,
     validation_exception_handler,
+    pydantic_validation_exception_handler,
     database_exception_handler,
 )
 from services.ai_task_executor import ai_task_executor
 from services.extraction.handler import ExtractionTaskHandler
 from services.reference.handler import AssetReferenceHandler
 from services.storyboard.handler import StoryboardTaskHandler
+from utils.db_compat import migrate_ai_model_configs_sqlite
 from utils.enums import AiTaskTypeEnum
+
+migrate_ai_model_configs_sqlite(settings.DATABASE_URL)
 
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
@@ -38,6 +43,7 @@ app.add_middleware(
 # 注册异常处理器
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(ValidationError, pydantic_validation_exception_handler)
 app.add_exception_handler(DoesNotExist, database_exception_handler)
 app.add_exception_handler(IntegrityError, database_exception_handler)
 app.add_exception_handler(TortoiseValidationError, database_exception_handler)

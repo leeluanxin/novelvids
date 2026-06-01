@@ -251,7 +251,45 @@ async def test_reference_提交参考图任务():
     assert task.status == TaskStatusEnum.pending.value
     assert task.request_params["asset_id"] == asset.id
     assert task.request_params["novel_id"] == novel.id
+    assert task.request_params["invocation_type"] == "api"
+    assert task.request_params["cli_command"] is None
+    assert task.request_params["base_url"] == "https://mock.api.com/v1"
+    assert task.request_params["api_key"] == "sk-test"
+    assert task.request_params["model"] == "mock-model"
     print(f"    提交参考图任务 id={task.id}, asset_id={asset.id}, status=pending")
+
+
+@pytest.mark.asyncio
+async def test_reference_cli配置会快照调用信息():
+    """CLI 配置会把调用方式和命令快照进任务参数。"""
+    from models.config import AiModelConfig
+    from utils.enums import AiTaskTypeEnum, TaskStatusEnum
+
+    novel = await Novel.create(name="CLI Ref Novel", author="Author")
+    asset = await Asset.create(
+        novel_id=novel.id,
+        asset_type=AssetTypeEnum.person.value,
+        canonical_name="CLI参考图测试人物",
+    )
+    await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.reference_image.value,
+        name="test-ref-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedream-3.0",
+        is_active=True,
+    )
+
+    task = await asset_controller.reference(asset.id)
+
+    assert task.task_type == AiTaskTypeEnum.reference_image.value
+    assert task.status == TaskStatusEnum.pending.value
+    assert task.request_params["asset_id"] == asset.id
+    assert task.request_params["invocation_type"] == "cli"
+    assert task.request_params["cli_command"] == "dreamina"
+    assert task.request_params["base_url"] is None
+    assert task.request_params["api_key"] is None
+    assert task.request_params["model"] == "seedream-3.0"
 
 
 @pytest.mark.asyncio
@@ -334,7 +372,7 @@ async def test_reference_超时任务被清理后可重新提交():
         task_type=AiTaskTypeEnum.reference_image.value,
         status=TaskStatusEnum.running.value,
         request_params={"asset_id": asset.id},
-        started_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        started_at=datetime.now(timezone.utc) - timedelta(seconds=1200),
     )
 
     task = await asset_controller.reference(asset.id)

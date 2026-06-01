@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/services/api'
-import type { AiModelConfig } from '@/types'
+import type { AiModelConfig, InvocationType } from '@/types'
 
 const TASK_TYPE_MAP: Record<number, string> = {
   1: '实体提取',
@@ -30,12 +30,19 @@ const TASK_TYPE_MAP: Record<number, string> = {
   4: '视频生成',
 }
 
+const INVOCATION_TYPE_MAP: Record<InvocationType, string> = {
+  api: 'API调用',
+  cli: 'CLI调用',
+}
+
 const defaultForm = {
   task_type: 1,
   name: '',
+  invocation_type: 'api' as InvocationType,
   base_url: '',
   api_key: '',
   model: '',
+  cli_command: '',
   concurrency: 1,
 }
 
@@ -47,6 +54,8 @@ export const ConfigPage = () => {
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState({ ...defaultForm })
   const [visibleKeys, setVisibleKeys] = useState<Record<number, boolean>>({})
+
+  const isCli = form.invocation_type === 'cli'
 
   const fetchConfigs = async () => {
     try {
@@ -75,37 +84,36 @@ export const ConfigPage = () => {
     setForm({
       task_type: config.task_type,
       name: config.name,
+      invocation_type: config.invocation_type || 'api',
       base_url: config.base_url || '',
       api_key: config.api_key || '',
       model: config.model || '',
+      cli_command: config.cli_command || '',
       concurrency: config.concurrency,
     })
     setDialogOpen(true)
   }
+
+  const buildPayload = () => ({
+    task_type: form.task_type,
+    name: form.name.trim(),
+    invocation_type: form.invocation_type,
+    base_url: isCli ? undefined : form.base_url.trim() || undefined,
+    api_key: isCli ? undefined : form.api_key.trim() || undefined,
+    model: form.model.trim() || undefined,
+    cli_command: isCli ? form.cli_command.trim() || undefined : undefined,
+    concurrency: form.concurrency,
+  })
 
   const handleSave = async () => {
     if (!form.name.trim()) return
     try {
       setSaving(true)
       if (editId) {
-        await api.patchConfig(editId, {
-          task_type: form.task_type,
-          name: form.name.trim(),
-          base_url: form.base_url.trim() || undefined,
-          api_key: form.api_key.trim() || undefined,
-          model: form.model.trim() || undefined,
-          concurrency: form.concurrency,
-        })
+        await api.patchConfig(editId, buildPayload())
         toast.success('配置已更新')
       } else {
-        await api.createConfig({
-          task_type: form.task_type,
-          name: form.name.trim(),
-          base_url: form.base_url.trim() || undefined,
-          api_key: form.api_key.trim() || undefined,
-          model: form.model.trim() || undefined,
-          concurrency: form.concurrency,
-        })
+        await api.createConfig(buildPayload())
         toast.success('配置已创建')
       }
       setDialogOpen(false)
@@ -152,7 +160,6 @@ export const ConfigPage = () => {
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
-      {/* Header */}
       <div className="animate-fade-up flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
@@ -170,10 +177,8 @@ export const ConfigPage = () => {
         </Button>
       </div>
 
-      {/* Decorative line */}
       <div className="decorative-line animate-fade-in" style={{ animationDelay: '150ms' }} />
 
-      {/* Loading State */}
       {loading && (
         <div className="space-y-4 stagger-children">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -191,7 +196,6 @@ export const ConfigPage = () => {
         </div>
       )}
 
-      {/* Empty State */}
       {!loading && configs.length === 0 && (
         <div className="animate-scale-in flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-muted-foreground/20 p-16 relative overflow-hidden">
           <div className="absolute inset-0 animate-shimmer" />
@@ -205,7 +209,6 @@ export const ConfigPage = () => {
         </div>
       )}
 
-      {/* Config List */}
       {!loading && configs.length > 0 && (
         <div className="space-y-3 stagger-children">
           {configs.map((config) => (
@@ -213,7 +216,6 @@ export const ConfigPage = () => {
               key={config.id}
               className="group bg-card/40 border border-border/50 rounded-lg p-4 flex items-center gap-4 hover:bg-card/80 hover:border-primary/20 transition-all duration-200"
             >
-              {/* Status Dot */}
               <div className="relative flex-shrink-0">
                 <div
                   className={`h-3 w-3 rounded-full ${
@@ -225,12 +227,14 @@ export const ConfigPage = () => {
                 )}
               </div>
 
-              {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-bold text-base">{config.name}</span>
                   <Badge variant="default">
                     {TASK_TYPE_MAP[config.task_type] || `类型${config.task_type}`}
+                  </Badge>
+                  <Badge variant={config.invocation_type === 'cli' ? 'secondary' : 'outline'}>
+                    {INVOCATION_TYPE_MAP[config.invocation_type || 'api']}
                   </Badge>
                   {config.is_active && (
                     <Badge variant="success">已启用</Badge>
@@ -238,30 +242,35 @@ export const ConfigPage = () => {
                 </div>
                 <div className="flex items-center gap-4 mt-1.5 text-sm text-muted-foreground flex-wrap">
                   <span>模型: <span className="text-foreground/80">{config.model || '-'}</span></span>
-                  <span>URL: <span className="text-foreground/80">{config.base_url || '-'}</span></span>
-                  <span className="flex items-center gap-1">
-                    密钥:{' '}
-                    <span className="font-mono text-xs text-foreground/80">
-                      {visibleKeys[config.id]
-                        ? config.api_key || '-'
-                        : maskKey(config.api_key)}
-                    </span>
-                    <button
-                      onClick={() => toggleKeyVisibility(config.id)}
-                      className="inline-flex items-center justify-center text-muted-foreground hover:text-primary transition-colors"
-                    >
-                      {visibleKeys[config.id] ? (
-                        <EyeOff className="h-3.5 w-3.5" />
-                      ) : (
-                        <Eye className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  </span>
+                  {config.invocation_type === 'cli' ? (
+                    <span>命令: <span className="text-foreground/80 font-mono">{config.cli_command || '-'}</span></span>
+                  ) : (
+                    <>
+                      <span>URL: <span className="text-foreground/80">{config.base_url || '-'}</span></span>
+                      <span className="flex items-center gap-1">
+                        密钥:{' '}
+                        <span className="font-mono text-xs text-foreground/80">
+                          {visibleKeys[config.id]
+                            ? config.api_key || '-'
+                            : maskKey(config.api_key)}
+                        </span>
+                        <button
+                          onClick={() => toggleKeyVisibility(config.id)}
+                          className="inline-flex items-center justify-center text-muted-foreground hover:text-primary transition-colors"
+                        >
+                          {visibleKeys[config.id] ? (
+                            <EyeOff className="h-3.5 w-3.5" />
+                          ) : (
+                            <Eye className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </span>
+                    </>
+                  )}
                   <span>并发: <span className="text-primary font-medium">{config.concurrency}</span></span>
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex items-center gap-2 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
                 {!config.is_active && (
                   <Button
@@ -298,7 +307,6 @@ export const ConfigPage = () => {
         </div>
       )}
 
-      {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="glass">
           <DialogHeader>
@@ -325,6 +333,29 @@ export const ConfigPage = () => {
               </Select>
             </div>
             <div className="space-y-2">
+              <Label>调用方式</Label>
+              <Select
+                value={form.invocation_type}
+                onValueChange={(value: InvocationType) =>
+                  setForm((f) => ({
+                    ...f,
+                    invocation_type: value,
+                    base_url: value === 'cli' ? '' : f.base_url,
+                    api_key: value === 'cli' ? '' : f.api_key,
+                    cli_command: value === 'api' ? '' : f.cli_command,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="api">API调用</SelectItem>
+                  <SelectItem value="cli">CLI调用</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
               <Label>名称</Label>
               <Input
                 placeholder="例如: gpt-4o, veo3"
@@ -334,27 +365,43 @@ export const ConfigPage = () => {
                 }
               />
             </div>
-            <div className="space-y-2">
-              <Label>基础URL</Label>
-              <Input
-                placeholder="https://api.example.com"
-                value={form.base_url}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, base_url: e.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>API密钥</Label>
-              <Input
-                type="password"
-                placeholder="sk-..."
-                value={form.api_key}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, api_key: e.target.value }))
-                }
-              />
-            </div>
+            {!isCli && (
+              <>
+                <div className="space-y-2">
+                  <Label>基础URL</Label>
+                  <Input
+                    placeholder="https://api.example.com"
+                    value={form.base_url}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, base_url: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>API密钥</Label>
+                  <Input
+                    type="password"
+                    placeholder="sk-..."
+                    value={form.api_key}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, api_key: e.target.value }))
+                    }
+                  />
+                </div>
+              </>
+            )}
+            {isCli && (
+              <div className="space-y-2">
+                <Label>CLI命令</Label>
+                <Input
+                  placeholder="dreamina"
+                  value={form.cli_command}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, cli_command: e.target.value }))
+                  }
+                />
+              </div>
+            )}
             <div className="space-y-2">
               <Label>模型</Label>
               <Input

@@ -15,17 +15,29 @@ class AiModelConfig(AbstractBaseModel):
         max_length=100,
         description="配置名称，如 deepseek-v3、gpt-4o",
     )
+    invocation_type = fields.CharField(
+        max_length=20,
+        default="api",
+        description="调用方式：api/cli",
+    )
     base_url = fields.CharField(
         max_length=500,
+        null=True,
         description="API 地址",
     )
     api_key = fields.CharField(
         max_length=500,
+        null=True,
         description="API Key",
     )
     model = fields.CharField(
         max_length=200,
         description="模型名称",
+    )
+    cli_command = fields.CharField(
+        max_length=500,
+        null=True,
+        description="CLI 命令",
     )
     is_active = fields.BooleanField(
         default=False,

@@ -89,6 +89,8 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         request_params = {
             "asset_id": asset.id,
             "novel_id": asset.novel_id,
+            "invocation_type": config.invocation_type,
+            "cli_command": config.cli_command,
             "base_url": config.base_url,
             "api_key": config.api_key,
             "model": config.model,

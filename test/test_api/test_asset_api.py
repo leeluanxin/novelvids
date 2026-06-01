@@ -173,6 +173,40 @@ async def test_api_reference_asset(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_api_reference_asset_with_cli_config(client: AsyncClient):
+    """CLI 配置下提交参考图任务，接口返回形态保持不变。"""
+    from unittest.mock import AsyncMock, patch
+
+    from models.config import AiModelConfig
+    from utils.enums import AiTaskTypeEnum, TaskStatusEnum
+
+    novel = await Novel.create(name="CLI Ref API Novel", author="Author")
+    asset = await Asset.create(
+        novel_id=novel.id,
+        asset_type=AssetTypeEnum.person.value,
+        canonical_name="CLI API参考图测试",
+    )
+    await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.reference_image.value,
+        name="test-ref-cli-api",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedream-3.0",
+        is_active=True,
+    )
+
+    with patch("api.asset.ai_task_executor.run", new=AsyncMock()) as mock_run:
+        response = await client.get(f"/api/asset/reference/{asset.id}")
+
+    assert response.status_code == 200, response.text
+
+    data = response.json()["data"]
+    assert data["task_type"] == AiTaskTypeEnum.reference_image.value
+    assert data["status"] == TaskStatusEnum.pending.value
+    mock_run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_api_reference_no_config(client: AsyncClient):
     """无参考图配置时返回 404。"""
     novel = await Novel.create(name="No Config Ref API Novel", author="Author")
