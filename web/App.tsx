@@ -7,6 +7,7 @@ import { NovelDetail } from '@/pages/NovelDetail'
 import { WorkflowLayout } from '@/pages/workflow/WorkflowLayout'
 import { VideosPage } from '@/pages/Videos'
 import { ConfigPage } from '@/pages/Config'
+import { StylesPage } from '@/pages/Styles'
 
 const App: React.FC = () => {
   return (
@@ -28,6 +29,7 @@ const App: React.FC = () => {
             <Route path="/videos/novel/:id" element={<VideosPage />} />
             <Route path="/videos" element={<VideosPage />} />
             <Route path="/config" element={<ConfigPage />} />
+            <Route path="/styles" element={<StylesPage />} />
           </Routes>
         </Layout>
       </Router>

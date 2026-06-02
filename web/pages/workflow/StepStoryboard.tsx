@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Sparkles, Loader2, Edit3, Trash2, GripVertical } from "lucide-react"
 import { api } from "@/services/api"
-import type { Scene, Asset, AiTask } from "@/types"
+import type { Scene, Asset, AiTask, ScenePromptPreview } from "@/types"
 import { TaskStatusEnum } from "@/types"
 import { toast } from "sonner"
 import { sleep } from "@/lib/helpers"
@@ -38,7 +38,6 @@ async function pollTask(taskId: string): Promise<AiTask> {
   }
 }
 
-/** Parse text containing @EntityName references and render them as blue spans with hover preview */
 function EntityText({
   text,
   assetMap,
@@ -48,15 +47,13 @@ function EntityText({
 }) {
   const parts = useMemo(() => {
     const result: { type: "text" | "entity"; value: string }[] = []
-    // Match @{Multi Word Name} (preferred) or @SingleWord (legacy)
-    const regex = /@\{([^}]+)\}|@([\w\u4e00-\u9fff·]+)/g
+    const regex = /@\{([^}]+)\}|@([\w一-鿿·]+)/g
     let lastIndex = 0
     let match: RegExpExecArray | null
     while ((match = regex.exec(text)) !== null) {
       if (match.index > lastIndex) {
         result.push({ type: "text", value: text.slice(lastIndex, match.index) })
       }
-      // match[1] = braced name, match[2] = bare word name
       result.push({ type: "entity", value: match[1] || match[2] })
       lastIndex = regex.lastIndex
     }
@@ -72,8 +69,6 @@ function EntityText({
         if (part.type === "text") return <span key={i}>{part.value}</span>
 
         const asset = assetMap.get(part.value)
-
-        // Unrecognized entity — render as plain text (not blue)
         if (!asset) return <span key={i}>@{part.value}</span>
 
         return (
@@ -124,8 +119,14 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [promptDialogOpen, setPromptDialogOpen] = useState(false)
+  const [promptLoading, setPromptLoading] = useState(false)
+  const [promptPreview, setPromptPreview] = useState<ScenePromptPreview | null>(null)
+  const [promptForm, setPromptForm] = useState({
+    system_prompt: "",
+    user_prompt: "",
+  })
 
-  // Edit dialog state
   const [editingScene, setEditingScene] = useState<Scene | null>(null)
   const [editForm, setEditForm] = useState({
     description: "",
@@ -134,12 +135,10 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
   })
   const [saving, setSaving] = useState(false)
 
-  // Build name->asset lookup map
   const assetMap = useMemo(() => {
     const map = new Map<string, Asset>()
     for (const a of assets) {
       map.set(a.canonical_name, a)
-      // Also register aliases
       if (a.aliases) {
         for (const alias of a.aliases) {
           map.set(alias, a)
@@ -166,25 +165,46 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
       const res = await api.getAssets(novelId)
       setAssets(res.data.items)
     } catch {
-      // Silent fail — assets are supplementary
     }
   }
 
   useEffect(() => {
-    loadScenes()
-    loadAssets()
+    void loadScenes()
+    void loadAssets()
   }, [chapterId, novelId])
+
+  const openPromptDialog = async () => {
+    try {
+      setPromptLoading(true)
+      const res = await api.previewScenePrompt({ chapter_id: chapterId })
+      setPromptPreview(res.data)
+      setPromptForm({
+        system_prompt: res.data.system_prompt || "",
+        user_prompt: res.data.user_prompt || "",
+      })
+      setPromptDialogOpen(true)
+    } catch (err) {
+      toast.error((err as Error).message || "加载分镜 Prompt 失败")
+    } finally {
+      setPromptLoading(false)
+    }
+  }
 
   const handleGenerate = async () => {
     try {
       setGenerating(true)
-      const res = await api.generateScenes({ chapter_id: chapterId })
+      const res = await api.generateScenes({
+        chapter_id: chapterId,
+        system_prompt_override: promptForm.system_prompt.trim(),
+        user_prompt_override: promptForm.user_prompt.trim(),
+      })
       const task = await pollTask(res.data.id)
       if (task.status === TaskStatusEnum.COMPLETED) {
         toast.success("分镜生成完成")
       } else {
         toast.error(task.error_message || "分镜生成失败")
       }
+      setPromptDialogOpen(false)
       await loadScenes()
     } catch (err) {
       toast.error((err as Error).message || "分镜生成失败")
@@ -207,10 +227,12 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
     try {
       setSaving(true)
       const patch: Partial<Scene> = {}
-      if (editForm.description.trim() !== (editingScene.description || ""))
+      if (editForm.description.trim() !== (editingScene.description || "")) {
         patch.description = editForm.description.trim() || undefined
-      if (editForm.prompt.trim() !== (editingScene.prompt || ""))
+      }
+      if (editForm.prompt.trim() !== (editingScene.prompt || "")) {
         patch.prompt = editForm.prompt.trim() || undefined
+      }
       const dur = parseFloat(editForm.duration)
       if (!isNaN(dur) && dur !== editingScene.duration) patch.duration = dur
 
@@ -238,7 +260,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">分镜管理</h2>
@@ -246,8 +267,13 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
             将章节拆解为镜头和场景
           </p>
         </div>
-        <Button onClick={handleGenerate} disabled={generating}>
-          {generating ? (
+        <Button onClick={openPromptDialog} disabled={generating || promptLoading}>
+          {promptLoading ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              加载 Prompt...
+            </>
+          ) : generating ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               生成中...
@@ -261,7 +287,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
         </Button>
       </div>
 
-      {/* Loading skeleton */}
       {loading ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => (
@@ -271,14 +296,12 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
       ) : scenes.length === 0 ? (
         <p className="text-muted-foreground text-center py-12">暂无分镜数据</p>
       ) : (
-        /* Scene list */
         <div className="space-y-3">
           {scenes.map((scene) => (
             <div
               key={scene.id}
               className="flex gap-4 p-4 bg-card border rounded-lg hover:border-primary/50 transition-colors group"
             >
-              {/* Left: sequence number + duration */}
               <div className="flex flex-col items-center justify-center gap-1 shrink-0 w-16">
                 <GripVertical className="h-4 w-4 text-muted-foreground/40" />
                 <span className="text-2xl font-bold text-muted-foreground">
@@ -291,14 +314,11 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
                 )}
               </div>
 
-              {/* Middle: description, prompt, asset tags */}
               <div className="flex-1 space-y-2 min-w-0">
-                {/* Description */}
                 <p className="text-white font-medium">
                   {scene.description || "暂无描述"}
                 </p>
 
-                {/* Prompt display with @entity highlighting */}
                 {scene.prompt ? (
                   <p className="text-sm font-mono bg-background/50 border rounded p-2 text-muted-foreground whitespace-pre-wrap leading-relaxed">
                     <EntityText text={scene.prompt} assetMap={assetMap} />
@@ -309,7 +329,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
                   </p>
                 )}
 
-                {/* Asset tags */}
                 {scene.assets && scene.assets.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {scene.assets.map((asset) => (
@@ -325,7 +344,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
                 )}
               </div>
 
-              {/* Right: action buttons */}
               <div className="flex flex-col gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                 <Button
                   size="icon"
@@ -348,7 +366,68 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
         </div>
       )}
 
-      {/* Edit Dialog */}
+      <Dialog open={promptDialogOpen} onOpenChange={(open) => !generating && setPromptDialogOpen(open)}>
+        <DialogContent className="glass max-w-5xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="gradient-text text-xl">确认分镜生成 Prompt</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border bg-card/40 p-4 space-y-2">
+              <p className="text-sm font-medium">当前分镜风格</p>
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <Badge variant="secondary">{promptPreview?.storyboard_style?.name || "未命名风格"}</Badge>
+                {promptPreview?.storyboard_style?.source && (
+                  <Badge variant="outline">{promptPreview.storyboard_style.source}</Badge>
+                )}
+                {promptPreview?.storyboard_style?.builtin_key && (
+                  <Badge variant="outline">{promptPreview.storyboard_style.builtin_key}</Badge>
+                )}
+              </div>
+              {promptPreview?.storyboard_style?.positive_prompt && (
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap leading-6">
+                  {promptPreview.storyboard_style.positive_prompt}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">System Prompt</label>
+              <Textarea
+                value={promptForm.system_prompt}
+                onChange={(e) => setPromptForm((prev) => ({ ...prev, system_prompt: e.target.value }))}
+                rows={16}
+                className="font-mono text-xs leading-6"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">User Prompt</label>
+              <Textarea
+                value={promptForm.user_prompt}
+                onChange={(e) => setPromptForm((prev) => ({ ...prev, user_prompt: e.target.value }))}
+                rows={10}
+                className="font-mono text-xs leading-6"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPromptDialogOpen(false)} disabled={generating}>
+              取消
+            </Button>
+            <Button
+              onClick={handleGenerate}
+              disabled={generating || !promptForm.system_prompt.trim() || !promptForm.user_prompt.trim()}
+              className="shadow-lg shadow-primary/20"
+            >
+              {generating && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+              确认并生成
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!editingScene} onOpenChange={(open) => !open && setEditingScene(null)}>
         <DialogContent className="glass max-w-2xl">
           <DialogHeader>

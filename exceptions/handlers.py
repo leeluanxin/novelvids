@@ -74,7 +74,13 @@ async def database_exception_handler(request: Request, exc: Exception):
             message=f"数据验证错误: {str(exc)}",
         )
         return JSONResponse(status_code=200, content=response_data.model_dump())
-    return JSONResponse(status_code=500, content=str(exc))
+
+    response_data = ResponseSchema(
+        code=500,
+        data=None,
+        message=str(exc) or "数据库异常",
+    )
+    return JSONResponse(status_code=500, content=response_data.model_dump())
 
 
 # 捕获 Python 所有未处理异常

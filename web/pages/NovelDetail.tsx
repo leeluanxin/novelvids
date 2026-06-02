@@ -13,6 +13,7 @@ import {
   Plus,
   ImagePlus,
   X,
+  Palette,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -26,8 +27,16 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { api } from '@/services/api'
-import type { Novel, Chapter, Pagination as PaginationType } from '@/types'
+import { BUILTIN_STYLES, getAllStylePresets, toStyleBinding } from '@/pages/Styles'
+import type { Novel, Chapter, Pagination as PaginationType, StylePreset } from '@/types'
 import { Pagination } from '@/components/Pagination'
 
 export const NovelDetail: React.FC = () => {
@@ -43,10 +52,13 @@ export const NovelDetail: React.FC = () => {
   const [splitting, setSplitting] = useState(false)
 
   const [editOpen, setEditOpen] = useState(false)
+  const defaultStyleId = BUILTIN_STYLES[0]?.id ?? ''
+  const [styleOptions, setStyleOptions] = useState<StylePreset[]>([])
   const [editForm, setEditForm] = useState({
     name: '',
     author: '',
     description: '',
+    styleId: defaultStyleId,
   })
   const [saving, setSaving] = useState(false)
   const editContentRef = useRef<HTMLTextAreaElement>(null)
@@ -99,6 +111,24 @@ export const NovelDetail: React.FC = () => {
     setLoading(false)
   }, [fetchNovel, fetchChapters])
 
+  const loadStyleOptions = async () => {
+    try {
+      setStyleOptions(await getAllStylePresets())
+    } catch (err) {
+      toast.error((err as Error).message || '加载风格失败')
+    }
+  }
+
+  useEffect(() => {
+    void loadStyleOptions()
+  }, [])
+
+  useEffect(() => {
+    if (editOpen) {
+      void loadStyleOptions()
+    }
+  }, [editOpen])
+
   useEffect(() => {
     if (novelId) loadData()
   }, [novelId, loadData])
@@ -113,6 +143,7 @@ export const NovelDetail: React.FC = () => {
       name: novel.name || '',
       author: novel.author || '',
       description: novel.description || '',
+      styleId: novel.style?.id || defaultStyleId,
     })
     setEditCoverPreview(novel.cover || null)
     setEditCoverFile(null)
@@ -136,12 +167,14 @@ export const NovelDetail: React.FC = () => {
         const uploaded = uploadRes.data.files[0]
         cover = `/media/${uploaded.filename}`
       }
+      const selectedStyle = styleOptions.find((item) => item.id === editForm.styleId)
       const res = await api.updateNovel(novel.id, {
         name: editForm.name,
         author: editForm.author,
         description: editForm.description,
         content: editContentRef.current?.value ?? '',
         cover: cover || '',
+        style: toStyleBinding(selectedStyle),
       })
       setNovel(res.data)
       setEditOpen(false)
@@ -312,7 +345,7 @@ export const NovelDetail: React.FC = () => {
                   {novel.description}
                 </p>
               )}
-              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                 {novel.author && (
                   <span>
                     作者：<span className="text-foreground">{novel.author}</span>
@@ -324,6 +357,15 @@ export const NovelDetail: React.FC = () => {
                 {contentLength > 0 && (
                   <span>
                     内容字数：<span className="text-primary font-medium">{contentLength.toLocaleString()}</span>
+                  </span>
+                )}
+                {novel.style?.name && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Palette className="h-3.5 w-3.5" />
+                    风格：
+                    <Badge variant={novel.style.source === 'builtin' ? 'secondary' : 'outline'}>
+                      {novel.style.name}
+                    </Badge>
                   </span>
                 )}
               </div>
@@ -563,6 +605,25 @@ export const NovelDetail: React.FC = () => {
                 placeholder="小说简介"
                 rows={3}
               />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">关联风格</label>
+              <Select value={editForm.styleId} onValueChange={(value) => setEditForm((prev) => ({ ...prev, styleId: value }))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择项目风格" />
+                </SelectTrigger>
+                <SelectContent>
+                  {styleOptions.map((style) => (
+                    <SelectItem key={style.id} value={style.id}>
+                      {style.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                保存后会更新该项目绑定的风格快照，供后续视觉资产流程使用。
+              </p>
             </div>
 
             <div className="space-y-2">

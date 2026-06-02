@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from utils.db_compat import migrate_ai_model_configs_sqlite
+from utils.db_compat import migrate_ai_model_configs_sqlite, migrate_novels_style_sqlite
 
 
 def _create_legacy_db(db_path: Path):
@@ -117,3 +117,80 @@ def test_migrate_ai_model_configs_sqlite_is_noop_for_current_schema(tmp_path: Pa
 
     assert migrated is False
     assert not db_path.with_suffix(".db.config-migration.bak").exists()
+
+
+def test_migrate_novels_style_sqlite_adds_missing_style_column(tmp_path: Path):
+    db_path = tmp_path / "novels.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE novels (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                author VARCHAR(255),
+                cover VARCHAR(255),
+                description TEXT,
+                content TEXT,
+                total_chapters INT NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO novels (name, author, total_chapters) VALUES (?, ?, ?)",
+            ("test novel", "author", 1),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    migrated = migrate_novels_style_sqlite(f"sqlite://{db_path}")
+
+    assert migrated is True
+    assert db_path.with_suffix(".db.novels-style-migration.bak").exists()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {
+            row[1]: row for row in connection.execute("PRAGMA table_info(novels)").fetchall()
+        }
+        assert "style" in columns
+
+        row = connection.execute(
+            "SELECT name, style, total_chapters FROM novels"
+        ).fetchone()
+        assert row == ("test novel", "null", 1)
+    finally:
+        connection.close()
+
+
+def test_migrate_novels_style_sqlite_is_noop_for_current_schema(tmp_path: Path):
+    db_path = tmp_path / "novels_current.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE novels (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                author VARCHAR(255),
+                cover VARCHAR(255),
+                description TEXT,
+                content TEXT,
+                style JSON,
+                total_chapters INT NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    migrated = migrate_novels_style_sqlite(f"sqlite://{db_path}")
+
+    assert migrated is False
+    assert not db_path.with_suffix(".db.novels-style-migration.bak").exists()

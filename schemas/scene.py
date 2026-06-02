@@ -106,6 +106,14 @@ class SceneFullProperties(SceneProperties):
 class SceneGenerateCreate(BaseModel):
     """创建请求：chapter_id 必填"""
     chapter_id: int = Field(..., description="所属章节")
+    system_prompt_override: Optional[str] = Field(None, description="覆盖系统提示词")
+    user_prompt_override: Optional[str] = Field(None, description="覆盖用户提示词")
+
+
+class ScenePromptPreviewOut(BaseModel):
+    system_prompt: str = Field(..., description="当前实际使用的系统提示词")
+    user_prompt: str = Field(..., description="当前实际使用的用户提示词")
+    storyboard_style: Optional[Any] = Field(None, description="当前分镜风格快照")
 
 # --- 输入 Schema (In-bound) ---
 

@@ -187,6 +187,7 @@ class AssetReferenceHandler(BaseTaskHandler):
         base_url = request_params.get("base_url")
         api_key = request_params.get("api_key")
         model = request_params["model"]
+        style = request_params.get("style")
 
         asset = await Asset.get(id=asset_id)
 
@@ -210,6 +211,17 @@ class AssetReferenceHandler(BaseTaskHandler):
             "description": asset.description,
         }
 
+        reference_images = [
+            image
+            for image in [
+                style.get("reference_image") if isinstance(style, dict) else None,
+                asset.main_image,
+                asset.angle_image_1,
+                asset.angle_image_2,
+            ]
+            if image
+        ]
+
         try:
             if invocation_type == "cli":
                 if not cli_command:
@@ -219,13 +231,19 @@ class AssetReferenceHandler(BaseTaskHandler):
                     cli_command,
                     {
                         "model": model,
-                        "prompt": build_sora_compatible_prompt(data),
+                        "prompt": build_sora_compatible_prompt(data, style=style),
                         "asset_id": asset_id,
                     },
                 )
             else:
                 client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-                image_list = await generate_for_sora_consistency(client, data, model=model)
+                image_list = await generate_for_sora_consistency(
+                    client,
+                    data,
+                    reference_images=reference_images,
+                    model=model,
+                    style=style,
+                )
                 image_urls = [image.url for image in image_list if getattr(image, "url", None)]
 
             result_urls = []

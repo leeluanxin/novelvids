@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 
 from controllers.scene import scene_controller
-from schemas.scene import SceneBriefOut, SceneCreate, SceneUpdate, ScenePatch, SceneOut, SceneGenerateCreate
+from schemas.scene import SceneBriefOut, SceneCreate, SceneUpdate, ScenePatch, SceneOut, SceneGenerateCreate, ScenePromptPreviewOut
 from schemas.ai_task import AiTaskOut
 from services.ai_task_executor import ai_task_executor
 from utils.page import QueryParams, get_list_params
@@ -10,10 +10,24 @@ from utils.response_format import PaginationResponse, ResponseSchema
 router = APIRouter()
 
 
+@router.post("/generate/preview", summary="预览分镜生成Prompt", response_model=ResponseSchema[ScenePromptPreviewOut])
+async def preview_scene_prompt(generate_data: SceneGenerateCreate):
+    prompt_preview = await scene_controller.build_prompt_preview(
+        generate_data.chapter_id,
+        system_prompt_override=generate_data.system_prompt_override,
+        user_prompt_override=generate_data.user_prompt_override,
+    )
+    return ResponseSchema(data=prompt_preview)
+
+
 @router.post("/generate/", summary="AI生成分镜", response_model=ResponseSchema[AiTaskOut])
 async def generate_scene(generate_data: SceneGenerateCreate, background_tasks: BackgroundTasks):
     """提交分镜生成任务，返回任务记录供前端轮询"""
-    task = await scene_controller.generate(generate_data.chapter_id)
+    task = await scene_controller.generate(
+        generate_data.chapter_id,
+        system_prompt_override=generate_data.system_prompt_override,
+        user_prompt_override=generate_data.user_prompt_override,
+    )
     background_tasks.add_task(ai_task_executor.run, task)
     return ResponseSchema(data=task)
 

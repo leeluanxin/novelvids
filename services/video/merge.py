@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -15,12 +16,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_ffmpeg_binary(name: str) -> str:
+    binary = shutil.which(name)
+    if binary:
+        return binary
+
+    candidates = [
+        os.path.join("/opt/homebrew/bin", name),
+        os.path.join("/usr/local/bin", name),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    raise RuntimeError(f"未找到 {name}，请先安装 FFmpeg 并确保 {name} 可执行")
+
+
 def _check_audio_stream(video_path: str) -> bool:
     """检查视频文件是否包含音频流。"""
-    cmd = ['ffprobe', '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'default=noprint_wrappers=1', video_path]
+    try:
+        ffprobe_bin = _resolve_ffmpeg_binary("ffprobe")
+    except RuntimeError:
+        return False
+
+    cmd = [ffprobe_bin, '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'default=noprint_wrappers=1', video_path]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        # 如果有输出，说明有音频流
         return bool(result.stdout.strip())
     except Exception:
         return False
@@ -67,8 +88,25 @@ class VideoMerger:
             ValueError: 视频数量不足或文件不存在
             RuntimeError: FFmpeg 执行失败
         """
-        if len(videos) < 2:
-            raise ValueError(f"至少需要2个视频才能合并，当前只有 {len(videos)} 个")
+        if len(videos) < 1:
+            raise ValueError("至少需要1个视频才能合并")
+
+        if len(videos) == 1:
+            video = videos[0]
+            path = self._get_video_path(video.id)
+            if not path:
+                raise ValueError(f"视频文件不存在: video_id={video.id}")
+
+            if output_filename is None:
+                output_filename = f"chapter_{chapter_id}_merged.mp4"
+
+            output_path = os.path.abspath(os.path.join(self.output_dir, output_filename))
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(path, "rb") as src, open(output_path, "wb") as dst:
+                dst.write(src.read())
+            return f"/media/videos/merged/{output_filename}"
+
+        ffmpeg_bin = _resolve_ffmpeg_binary("ffmpeg")
 
         # 收集所有视频文件路径，并检测是否有音频
         video_paths = []
@@ -101,7 +139,7 @@ class VideoMerger:
                 filter_parts.append(f'[{i}:v][{i}:a]')
             filter_complex = ''.join(filter_parts) + f'concat=n={len(video_paths)}:v=1:a=1[outv][outa]'
             cmd = [
-                'ffmpeg', '-y'
+                ffmpeg_bin, '-y'
             ] + input_args + [
                 '-filter_complex', filter_complex,
                 '-map', '[outv]',
@@ -115,7 +153,7 @@ class VideoMerger:
                 filter_parts.append(f'[{i}:v]')
             filter_complex = ''.join(filter_parts) + f'concat=n={len(video_paths)}:v=1:a=0[v]'
             cmd = [
-                'ffmpeg', '-y'
+                ffmpeg_bin, '-y'
             ] + input_args + [
                 '-filter_complex', filter_complex,
                 '-map', '[v]',
@@ -135,7 +173,7 @@ class VideoMerger:
 
             filter_complex = ''.join(filter_parts) + f'concat=n={len(video_paths)}:v=1:a=1[outv][outa]'
             cmd = [
-                'ffmpeg', '-y'
+                ffmpeg_bin, '-y'
             ] + input_args + [
                 '-filter_complex', filter_complex,
                 '-map', '[outv]',

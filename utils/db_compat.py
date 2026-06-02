@@ -1,3 +1,4 @@
+import json
 import shutil
 import sqlite3
 from pathlib import Path
@@ -12,6 +13,12 @@ def _sqlite_path_from_url(database_url: str) -> Path | None:
         return None
 
     return Path(sqlite_path)
+
+
+def _ensure_backup(db_path: Path, suffix: str) -> None:
+    backup_path = db_path.with_suffix(f"{db_path.suffix}.{suffix}")
+    if not backup_path.exists():
+        shutil.copy2(db_path, backup_path)
 
 
 def migrate_ai_model_configs_sqlite(database_url: str) -> bool:
@@ -35,9 +42,7 @@ def migrate_ai_model_configs_sqlite(database_url: str) -> bool:
         if already_migrated:
             return False
 
-        backup_path = db_path.with_suffix(f"{db_path.suffix}.config-migration.bak")
-        if not backup_path.exists():
-            shutil.copy2(db_path, backup_path)
+        _ensure_backup(db_path, "config-migration.bak")
 
         invocation_type_expr = (
             "COALESCE(invocation_type, 'api')" if "invocation_type" in column_names else "'api'"
@@ -108,6 +113,88 @@ def migrate_ai_model_configs_sqlite(database_url: str) -> bool:
         )
         connection.commit()
         return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def migrate_novels_style_sqlite(database_url: str) -> bool:
+    db_path = _sqlite_path_from_url(database_url)
+    if db_path is None or not db_path.exists():
+        return False
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = connection.execute("PRAGMA table_info(novels)").fetchall()
+        if not columns:
+            return False
+
+        column_names = {column[1] for column in columns}
+        if "style" in column_names:
+            return False
+
+        _ensure_backup(db_path, "novels-style-migration.bak")
+
+        connection.execute("BEGIN")
+        connection.execute("ALTER TABLE novels ADD COLUMN style JSON")
+        connection.execute("UPDATE novels SET style = ? WHERE style IS NULL", (json.dumps(None),))
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def migrate_style_presets_sqlite(database_url: str) -> bool:
+    db_path = _sqlite_path_from_url(database_url)
+    if db_path is None or not db_path.exists():
+        return False
+
+    connection = sqlite3.connect(db_path)
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+        _ensure_backup(db_path, "style-presets-migration.bak")
+
+        if "style_presets" not in tables:
+            connection.execute("BEGIN")
+            connection.execute(
+                """
+                CREATE TABLE style_presets (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    name VARCHAR(255) NOT NULL UNIQUE,
+                    builtin_key VARCHAR(100) UNIQUE,
+                    positive_prompt TEXT NOT NULL,
+                    reference_image VARCHAR(500)
+                )
+                """
+            )
+            connection.commit()
+            return True
+
+        columns = connection.execute("PRAGMA table_info(style_presets)").fetchall()
+        column_names = {column[1] for column in columns}
+        if "builtin_key" not in column_names:
+            connection.execute("BEGIN")
+            connection.execute("ALTER TABLE style_presets ADD COLUMN builtin_key VARCHAR(100)")
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uid_style_presets_builtin_key ON style_presets (builtin_key)"
+            )
+            connection.commit()
+            return True
+
+        return False
     except Exception:
         connection.rollback()
         raise

@@ -1,6 +1,6 @@
 import type {
   Novel, Chapter, Asset, Scene, Video, AiModelConfig, AiTask, ChapterVideoItem, VideoMergeOut,
-  PaginationResponse, SingleResponse, AllEnums,
+  PaginationResponse, SingleResponse, AllEnums, StylePreset, ScenePromptPreview, SceneGeneratePayload,
 } from '../types';
 
 const BASE = '/api';
@@ -10,7 +10,19 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
-  const json = await res.json();
+
+  const raw = await res.text();
+  if (!raw) {
+    throw new Error(`接口返回空响应: ${url}`);
+  }
+
+  let json: { code?: number; message?: string } & T;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(raw || `接口未返回 JSON: ${url}`);
+  }
+
   if (json.code !== 0) throw new Error(json.message || 'Request failed');
   return json;
 }
@@ -110,7 +122,10 @@ class ApiService {
   deleteScene(id: number): Promise<SingleResponse<null>> {
     return request(`/scene/${id}`, { method: 'DELETE' });
   }
-  generateScenes(data: { chapter_id: number }): Promise<SingleResponse<AiTask>> {
+  previewScenePrompt(data: SceneGeneratePayload): Promise<SingleResponse<ScenePromptPreview>> {
+    return request('/scene/generate/preview', { method: 'POST', body: JSON.stringify(data) });
+  }
+  generateScenes(data: SceneGeneratePayload): Promise<SingleResponse<AiTask>> {
     return request('/scene/generate/', { method: 'POST', body: JSON.stringify(data) });
   }
 
@@ -139,6 +154,9 @@ class ApiService {
   mergeChapterVideos(data: { chapter_id: number }): Promise<SingleResponse<VideoMergeOut>> {
     return request('/video/merge', { method: 'POST', body: JSON.stringify(data) });
   }
+  testMergeChapterVideos(data: { chapter_id: number }): Promise<SingleResponse<VideoMergeOut>> {
+    return request('/video/merge/test', { method: 'POST', body: JSON.stringify(data) });
+  }
   getMergedVideo(chapterId: number): Promise<SingleResponse<VideoMergeOut>> {
     return request(`/video/merge/${chapterId}`);
   }
@@ -161,6 +179,26 @@ class ApiService {
   }
   activateConfig(id: number): Promise<SingleResponse<AiModelConfig>> {
     return request(`/config/${id}/activate`, { method: 'POST' });
+  }
+
+  // --- Style Presets ---
+  getStylePresets(page = 1, pageSize = 100, search?: string): Promise<PaginationResponse<StylePreset>> {
+    return request(`/style-preset${qs({ page, page_size: pageSize, search })}`);
+  }
+  getStylePreset(id: string | number): Promise<SingleResponse<StylePreset>> {
+    return request(`/style-preset/${id}`);
+  }
+  createStylePreset(data: Partial<StylePreset>): Promise<SingleResponse<StylePreset>> {
+    return request('/style-preset', { method: 'POST', body: JSON.stringify(data) });
+  }
+  updateStylePreset(id: string | number, data: Partial<StylePreset>): Promise<SingleResponse<StylePreset>> {
+    return request(`/style-preset/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  }
+  patchStylePreset(id: string | number, data: Partial<StylePreset>): Promise<SingleResponse<StylePreset>> {
+    return request(`/style-preset/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+  deleteStylePreset(id: string | number): Promise<SingleResponse<null>> {
+    return request(`/style-preset/${id}`, { method: 'DELETE' });
   }
 
   // --- Tasks ---

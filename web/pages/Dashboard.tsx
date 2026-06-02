@@ -16,17 +16,27 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { api } from '@/services/api'
-import type { Novel, Pagination } from '@/types'
+import { BUILTIN_STYLES, getAllStylePresets, toStyleBinding } from '@/pages/Styles'
+import type { Novel, Pagination, StylePreset } from '@/types'
 
 export const Dashboard = () => {
+  const defaultStyleId = BUILTIN_STYLES[0]?.id ?? ''
   const [novels, setNovels] = useState<Novel[]>([])
   const [loading, setLoading] = useState(true)
   const [pagination, setPagination] = useState<Pagination | null>(null)
   const [page, setPage] = useState(1)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ name: '', author: '', description: '', cover: '' })
+  const [styleOptions, setStyleOptions] = useState<StylePreset[]>([])
+  const [form, setForm] = useState({ name: '', author: '', description: '', cover: '', styleId: defaultStyleId })
   const [uploadingCover, setUploadingCover] = useState(false)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -64,6 +74,14 @@ export const Dashboard = () => {
     }
   }
 
+  const loadStyleOptions = async () => {
+    try {
+      setStyleOptions(await getAllStylePresets())
+    } catch (err) {
+      toast.error((err as Error).message || '加载风格失败')
+    }
+  }
+
   const fetchNovels = async (p: number = page) => {
     try {
       setLoading(true)
@@ -78,6 +96,16 @@ export const Dashboard = () => {
   }
 
   useEffect(() => {
+    void loadStyleOptions()
+  }, [])
+
+  useEffect(() => {
+    if (dialogOpen) {
+      void loadStyleOptions()
+    }
+  }, [dialogOpen])
+
+  useEffect(() => {
     fetchNovels(page)
   }, [page])
 
@@ -85,15 +113,17 @@ export const Dashboard = () => {
     if (!form.name.trim()) return
     try {
       setCreating(true)
+      const selectedStyle = styleOptions.find((item) => item.id === form.styleId)
       await api.createNovel({
         name: form.name.trim(),
         author: form.author.trim() || undefined,
         description: form.description.trim() || undefined,
         cover: form.cover || undefined,
+        style: toStyleBinding(selectedStyle),
       })
       toast.success('项目创建成功')
       setDialogOpen(false)
-      setForm({ name: '', author: '', description: '', cover: '' })
+      setForm({ name: '', author: '', description: '', cover: '', styleId: defaultStyleId })
       clearCover()
       await fetchNovels(page)
     } catch (err: any) {
@@ -213,7 +243,14 @@ export const Dashboard = () => {
                 </div>
                 {/* Info */}
                 <CardContent className="p-4 space-y-1.5">
-                  <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors duration-200">{novel.name}</h3>
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="font-semibold text-base truncate group-hover:text-primary transition-colors duration-200">{novel.name}</h3>
+                    {novel.style?.name && (
+                      <Badge variant={novel.style.source === 'builtin' ? 'secondary' : 'outline'} className="shrink-0 max-w-[9rem] truncate">
+                        {novel.style.name}
+                      </Badge>
+                    )}
+                  </div>
                   {novel.author && (
                     <p className="text-sm text-muted-foreground">{novel.author}</p>
                   )}
@@ -343,6 +380,24 @@ export const Dashboard = () => {
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">关联风格</label>
+              <Select value={form.styleId} onValueChange={(value) => setForm((f) => ({ ...f, styleId: value }))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="选择项目风格" />
+                </SelectTrigger>
+                <SelectContent>
+                  {styleOptions.map((style) => (
+                    <SelectItem key={style.id} value={style.id}>
+                      {style.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                当前项目会保存所选风格快照，后续可用于视觉资产生成。
+              </p>
             </div>
           </div>
           <DialogFooter>

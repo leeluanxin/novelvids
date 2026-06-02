@@ -25,6 +25,9 @@ class StoryboardTaskHandler(BaseTaskHandler):
         base_url = request_params["base_url"]
         api_key = request_params["api_key"]
         model = request_params["model"]
+        style_prompt = request_params.get("storyboard_style_prompt")
+        system_prompt_override = request_params.get("system_prompt_override")
+        user_prompt_override = request_params.get("user_prompt_override")
 
         # 1. 获取章节和相关资产
         chapter = await Chapter.get(id=chapter_id).prefetch_related("novel")
@@ -51,7 +54,10 @@ class StoryboardTaskHandler(BaseTaskHandler):
                 client=client,
                 long_text=chapter.content,
                 entities=entities,
-                model=model
+                model=model,
+                style_prompt=style_prompt,
+                system_prompt_override=system_prompt_override,
+                user_prompt_override=user_prompt_override,
             )
 
             end_time = time.time()
@@ -62,7 +68,18 @@ class StoryboardTaskHandler(BaseTaskHandler):
                 chapter_id=chapter_id,
                 storyboard=storyboard,
                 api_metadata=api_metadata,
-                request_duration=request_duration
+                request_duration=request_duration,
+                storyboard_style={
+                    "id": request_params.get("storyboard_style_id"),
+                    "name": request_params.get("storyboard_style_name"),
+                    "source": request_params.get("storyboard_style_source"),
+                    "builtin_key": request_params.get("storyboard_style_builtin_key"),
+                    "positive_prompt": request_params.get("storyboard_style_prompt"),
+                },
+                actual_prompts={
+                    "system_prompt": request_params.get("actual_system_prompt"),
+                    "user_prompt": request_params.get("actual_user_prompt"),
+                },
             )
 
             # 5. 返回结果
@@ -85,7 +102,9 @@ class StoryboardTaskHandler(BaseTaskHandler):
         chapter_id: int,
         storyboard,
         api_metadata: dict,
-        request_duration: float
+        request_duration: float,
+        storyboard_style: dict,
+        actual_prompts: dict,
     ) -> List[Scene]:
         """将生成的分镜保存到数据库，并在 metadata 中存储元数据"""
         scenes_created = []
@@ -111,6 +130,8 @@ class StoryboardTaskHandler(BaseTaskHandler):
                 "shot_title": shot.description,
                 "duration_str": shot.duration,
                 "sequence_id": shot.sequence,
+                "storyboard_style": storyboard_style,
+                "actual_prompts": actual_prompts,
                 # API 调用元数据
                 "api_metadata": {
                     "model": api_metadata.get("model"),

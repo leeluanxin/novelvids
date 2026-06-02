@@ -1,43 +1,78 @@
 from openai import AsyncOpenAI
 
-def build_sora_compatible_prompt(data):
-    """
-    为 Sora 2 优化的结构化提示词
-    核心逻辑：使用身份锚点(Identity Anchors) + 空间多视角描述
-    """
-    asset_type = data.get("type")
-    name = data.get("canonical_name")
-    traits = data.get("base_traits")
-    desc = data.get("description")
 
-    # 通用电影级引导词：增强光影稳定性，降低 Sora 2 生成时的噪点
-    cinema_prefix = "二次元风格，视频静帧画面，电影感构图，极高保真度，4K分辨率。"
+def _normalize_sentence(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    if normalized[-1] in "。！？!?.,;；:：":
+        return normalized
+    return f"{normalized}。"
+
+
+def build_sora_compatible_prompt(data, style=None):
+    asset_type = data.get("type")
+    name = str(data.get("canonical_name") or "").strip()
+    traits = str(data.get("base_traits") or "").strip()
+    desc = str(data.get("description") or "").strip()
+    style = style if isinstance(style, dict) else {}
+    style_name = str(style.get("name") or "").strip()
+    style_prompt = str(style.get("positive_prompt") or "").strip()
+
+    subject_clause = {
+        "person": f"角色设计稿：{name}的全身三视图（正面、侧面、背面）",
+        "item": f"{name}的多角度产品展示",
+        "scene": f"{name}的宏大全景图",
+    }.get(asset_type, name)
+
+    detail_parts = []
+    if style_prompt:
+        detail_parts.append(style_prompt)
+    elif style_name:
+        detail_parts.append(f"整体风格参考「{style_name}」")
 
     if asset_type == "person":
-        # 针对 Sora 2 的人物一致性：生成三视图模式
-        # 这种模式能让 Sora 学习到人物的全方位特征
-        prompt = (f"{cinema_prefix}角色设计稿：{name}的全身三视图（正面、侧面、背面）。"
-                  f"视觉特征锚点：{traits}。{desc}。"
-                  "白色背景，平铺光，人体比例严谨，面部特征高度清晰且一致。")
+        detail_parts.extend([
+            f"视觉特征锚点：{traits}" if traits else "",
+            desc,
+            "全身三视图一致",
+            "白色背景",
+            "平铺光",
+            "人体比例严谨",
+            "面部特征高度清晰且一致",
+        ])
     elif asset_type == "item":
-        # 物品一致性：强调多角度细节和材质感
-        prompt = (f"{cinema_prefix}{name}的多角度产品展示，具有{traits}的特征。{desc}。"
-                  "摄影棚灯光，微距镜头，皮肤/材质纹理锐利，工作室渲染效果。")
+        detail_parts.extend([
+            f"特征：{traits}" if traits else "",
+            desc,
+            "多角度展示",
+            "摄影棚灯光",
+            "微距镜头",
+            "材质纹理锐利",
+            "工作室渲染效果",
+        ])
     elif asset_type == "scene":
-        # 场景一致性：强调空间深度，为 Sora 2 预留运镜空间
-        prompt = (f"{cinema_prefix}{name}的宏大全景图，空间架构：{traits}。{desc}。"
-                  "广角视角，丁达尔效应，细腻的光影层次，具有极强的空间立体感。")
+        detail_parts.extend([
+            f"空间架构：{traits}" if traits else "",
+            desc,
+            "广角视角",
+            "丁达尔效应",
+            "细腻的光影层次",
+            "空间立体感强",
+        ])
     else:
-        prompt = f"{cinema_prefix}{name}, {traits}, {desc}"
+        detail_parts.extend([traits, desc])
 
-    return prompt
+    detail_clause = "，".join(part for part in detail_parts if part)
+    prompt_parts = [subject_clause, _normalize_sentence(detail_clause)]
+    return "".join(part for part in prompt_parts if part)
 
 
-async def generate_for_sora_consistency(client: AsyncOpenAI, data, reference_images=None, model="doubao-seedream-4-5-251128"):
+async def generate_for_sora_consistency(client: AsyncOpenAI, data, reference_images=None, model="doubao-seedream-4-5-251128", style=None):
     """
     执行生成任务，支持多图参考 (异步)
     """
-    final_prompt = build_sora_compatible_prompt(data)
+    final_prompt = build_sora_compatible_prompt(data, style=style)
 
     extra_body = {
         "sequential_image_generation": "disabled",

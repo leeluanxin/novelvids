@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import {
-  BookOpen, MonitorPlay, Settings, ChevronLeft, ChevronRight,
+  BookOpen, MonitorPlay, Settings, Palette, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -9,6 +9,7 @@ const navItems = [
   { path: '/', icon: BookOpen, label: '项目管理', match: (p: string) => p === '/' || p.startsWith('/novel') },
   { path: '/videos', icon: MonitorPlay, label: '视频库', match: (p: string) => p.startsWith('/videos') },
   { path: '/config', icon: Settings, label: '模型配置', match: (p: string) => p.startsWith('/config') },
+  { path: '/styles', icon: Palette, label: '风格管理', match: (p: string) => p.startsWith('/styles') },
 ]
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {

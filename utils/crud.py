@@ -86,7 +86,7 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         return results
 
     async def create(self, obj_in: CreateSchemaType, **kwargs) -> ModelType:
-        if isinstance(obj_in, Dict):
+        if isinstance(obj_in, dict):
             obj_dict = obj_in
         else:
             obj_dict = obj_in.model_dump(exclude_unset=True)
@@ -97,13 +97,15 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
     async def update(
         self, instance: ModelType, obj_in: Union[UpdateSchemaType, Dict[str, Any]]
     ) -> ModelType:
-        if isinstance(obj_in, Dict):
+        if isinstance(obj_in, dict):
             obj_dict = obj_in
         else:
             obj_dict = obj_in.model_dump(exclude_unset=True, exclude={"id"})
-        obj = instance.update_from_dict(obj_dict)
-        await obj.save()
-        return obj
+
+        instance.update_from_dict(obj_dict)
+        update_fields = list(obj_dict.keys())
+        await instance.save(update_fields=update_fields)
+        return instance
 
     async def patch(
             self, instance: ModelType, obj_in: Union[UpdateSchemaType, Dict[str, Any]]

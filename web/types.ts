@@ -22,6 +22,17 @@ export enum VideoModelTypeEnum {
 
 export type InvocationType = 'api' | 'cli'
 
+export type StyleSource = 'builtin' | 'custom'
+
+export interface StyleBinding {
+  id: string;
+  name: string;
+  source: StyleSource;
+  builtin_key?: 'reference-default' | 'storyboard-default';
+  positive_prompt?: string;
+  reference_image?: string;
+}
+
 export interface Novel {
   id: number;
   name: string;
@@ -30,6 +41,7 @@ export interface Novel {
   cover?: string;
   total_chapters?: number;
   content?: string;
+  style?: StyleBinding;
   created_at: string;
   updated_at: string;
 }
@@ -117,6 +129,18 @@ export interface AiTask {
   created_at: string;
 }
 
+export interface ScenePromptPreview {
+  system_prompt: string;
+  user_prompt: string;
+  storyboard_style?: StyleBinding;
+}
+
+export interface SceneGeneratePayload {
+  chapter_id: number;
+  system_prompt_override?: string;
+  user_prompt_override?: string;
+}
+
 export interface AiModelConfig {
   id: number;
   task_type: number;
@@ -162,4 +186,15 @@ export interface SingleResponse<T> {
   code: number;
   message: string;
   data: T;
+}
+
+export interface StylePreset {
+  id: string;
+  name: string;
+  positive_prompt: string;
+  reference_image?: string;
+  source: StyleSource;
+  builtin_key?: 'reference-default' | 'storyboard-default';
+  created_at?: string;
+  updated_at?: string;
 }

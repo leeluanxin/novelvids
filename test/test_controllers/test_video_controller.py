@@ -2,6 +2,7 @@ import base64
 import os
 
 import pytest
+from pydantic import BaseModel
 from unittest.mock import AsyncMock, patch
 
 from config import settings
@@ -22,6 +23,17 @@ from utils.enums import (
     TaskStatusEnum,
     VideoModelTypeEnum,
 )
+
+
+class _VideoListItemOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    scene_id: int
+    model_type: VideoModelTypeEnum | None = None
+    url: str | None = None
+    status: TaskStatusEnum | None = None
+    metadata: object | None = None
 
 
 # =====================================================================
@@ -263,6 +275,298 @@ async def test_查询视频状态_失败():
 
 
 @pytest.mark.asyncio
+async def test_小说视频列表_加载时主动补查远端状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="load-refresh-001",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/load-refresh.mp4",
+            "metadata": {"source": "load-refresh"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+
+        result = await video_controller.get_novel_videos(scene.chapter.novel_id)
+
+    assert len(result) == 1
+    assert result[0]["id"] == video.id
+    assert result[0]["status"] == TaskStatusEnum.completed.value
+    assert result[0]["url"] == f"/media/videos/{video.id}.mp4"
+    mock_dl.assert_called_once_with("https://cdn.example.com/load-refresh.mp4", video.id)
+
+
+@pytest.mark.asyncio
+async def test_小说视频列表_补查失败时返回本地状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="load-refresh-002",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch.object(video_controller, "query_status", new_callable=AsyncMock) as mock_query:
+        mock_query.side_effect = RuntimeError("query boom")
+
+        result = await video_controller.get_novel_videos(scene.chapter.novel_id)
+
+    assert len(result) == 1
+    assert result[0]["id"] == video.id
+    assert result[0]["status"] == TaskStatusEnum.running.value
+    assert result[0]["url"] is None
+    mock_query.assert_awaited_once_with(video.id)
+
+
+@pytest.mark.asyncio
+async def test_分页视频列表_加载时主动补查远端状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="paged-refresh-001",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/paged-refresh.mp4",
+            "metadata": {"source": "paged-refresh"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+
+        result = await video_controller.list(
+            params=type("P", (), {
+                "page": 1,
+                "page_size": 100,
+                "sort": "-id",
+                "search": None,
+                "filters": {"scene_id": str(scene.id)},
+            })(),
+            response_model=_VideoListItemOut,
+        )
+
+    assert result["pagination"]["total"] == 1
+    assert len(result["items"]) == 1
+    assert result["items"][0].id == video.id
+    assert result["items"][0].status == TaskStatusEnum.completed
+    assert result["items"][0].url == f"/media/videos/{video.id}.mp4"
+    mock_dl.assert_called_once_with("https://cdn.example.com/paged-refresh.mp4", video.id)
+
+
+@pytest.mark.asyncio
+async def test_分页视频列表_补查失败时返回本地状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="paged-refresh-002",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch.object(video_controller, "query_status", new_callable=AsyncMock) as mock_query:
+        mock_query.side_effect = RuntimeError("query boom")
+
+        result = await video_controller.list(
+            params=type("P", (), {
+                "page": 1,
+                "page_size": 100,
+                "sort": "-id",
+                "search": None,
+                "filters": {"scene_id": str(scene.id)},
+            })(),
+            response_model=_VideoListItemOut,
+        )
+
+    assert result["pagination"]["total"] == 1
+    assert len(result["items"]) == 1
+    assert result["items"][0].id == video.id
+    assert result["items"][0].status == TaskStatusEnum.running
+    assert result["items"][0].url is None
+    mock_query.assert_awaited_once_with(video.id)
+
+
+@pytest.mark.asyncio
+async def test_章节视频列表_加载时主动补查远端状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="chapter-refresh-001",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/chapter-refresh.mp4",
+            "metadata": {"source": "chapter-refresh"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+
+        result = await video_controller.get_chapter_videos(scene.chapter_id)
+
+    assert len(result) == 1
+    assert result[0]["scene_id"] == scene.id
+    assert result[0]["video"] is not None
+    assert result[0]["video"]["id"] == video.id
+    assert result[0]["video"]["status"] == TaskStatusEnum.completed.value
+    assert result[0]["video"]["url"] == f"/media/videos/{video.id}.mp4"
+    mock_dl.assert_called_once_with("https://cdn.example.com/chapter-refresh.mp4", video.id)
+
+
+@pytest.mark.asyncio
+async def test_章节视频列表_补查失败时返回空视频():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="chapter-refresh-002",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch.object(video_controller, "query_status", new_callable=AsyncMock) as mock_query:
+        mock_query.side_effect = RuntimeError("query boom")
+
+        result = await video_controller.get_chapter_videos(scene.chapter_id)
+
+    assert len(result) == 1
+    assert result[0]["scene_id"] == scene.id
+    assert result[0]["video"] is None
+    mock_query.assert_awaited_once_with(video.id)
+
+
+@pytest.mark.asyncio
+async def test_合并章节视频_加载时主动补查远端状态():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="chapter-merge-refresh-001",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl, \
+         patch("controllers.video.video_merger.merge_videos") as mock_merge:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/chapter-merge-refresh.mp4",
+            "metadata": {"source": "chapter-merge-refresh"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+        mock_merge.return_value = "/media/videos/merged/chapter_1_merged.mp4"
+
+        result = await video_controller.merge_chapter_videos(scene.chapter_id)
+
+    assert result["chapter_id"] == scene.chapter_id
+    assert result["video_count"] == 1
+    assert result["merged_url"] == "/media/videos/merged/chapter_1_merged.mp4"
+    mock_dl.assert_called_once_with("https://cdn.example.com/chapter-merge-refresh.mp4", video.id)
+    mock_merge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_测试合并章节视频_只合并已有视频():
+    novel = await Novel.create(name="Merge Available Novel", author="Author")
+    chapter = await Chapter.create(novel=novel, number=1, name="第1章", content="内容")
+    scene1 = await Scene.create(chapter=chapter, sequence=1, prompt="scene1", duration=3.5)
+    await Scene.create(chapter=chapter, sequence=2, prompt="scene2", duration=5.0)
+    video1 = await Video.create(
+        scene=scene1,
+        model_type=VideoModelTypeEnum.viduq2.value,
+        status=TaskStatusEnum.completed.value,
+        url="/media/videos/available-1.mp4",
+    )
+
+    with patch("controllers.video.video_merger.merge_videos") as mock_merge:
+        mock_merge.return_value = "/media/videos/merged/chapter_test_merged.mp4"
+
+        result = await video_controller.merge_available_chapter_videos(chapter.id)
+
+    assert result["chapter_id"] == chapter.id
+    assert result["merged_url"] == "/media/videos/merged/chapter_test_merged.mp4"
+    assert result["video_count"] == 1
+    assert result["total_duration"] == 3.5
+    mock_merge.assert_called_once()
+    merge_args = mock_merge.call_args.args
+    assert len(merge_args[0]) == 1
+    assert merge_args[0][0].id == video1.id
+    assert merge_args[1] == chapter.id
+
+
+@pytest.mark.asyncio
+async def test_测试合并章节视频_补查后纳入合并():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.seedance.value,
+        external_task_id="chapter-test-merge-refresh-001",
+        status=TaskStatusEnum.running.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory, \
+         patch("controllers.video._download_video", new_callable=AsyncMock) as mock_dl, \
+         patch("controllers.video.video_merger.merge_videos") as mock_merge:
+        mock_gen = AsyncMock()
+        mock_gen.query.return_value = {
+            "status": TaskStatusEnum.completed,
+            "progress": 100,
+            "url": "https://cdn.example.com/chapter-test-merge-refresh.mp4",
+            "metadata": {"source": "chapter-test-merge-refresh"},
+        }
+        mock_factory.return_value = mock_gen
+        mock_dl.return_value = f"/media/videos/{video.id}.mp4"
+        mock_merge.return_value = "/media/videos/merged/chapter_test_refresh_merged.mp4"
+
+        result = await video_controller.merge_available_chapter_videos(scene.chapter_id)
+
+    assert result["chapter_id"] == scene.chapter_id
+    assert result["video_count"] == 1
+    assert result["merged_url"] == "/media/videos/merged/chapter_test_refresh_merged.mp4"
+    assert result["total_duration"] == round(scene.duration or 0, 1)
+    mock_dl.assert_called_once_with("https://cdn.example.com/chapter-test-merge-refresh.mp4", video.id)
+    mock_merge.assert_called_once()
+    merge_args = mock_merge.call_args.args
+    assert len(merge_args[0]) == 1
+    assert merge_args[0][0].id == video.id
+
+
+@pytest.mark.asyncio
+async def test_测试合并章节视频_没有可用视频时报错():
+    novel = await Novel.create(name="No Merge Available Novel", author="Author")
+    chapter = await Chapter.create(novel=novel, number=1, name="第1章", content="内容")
+    await Scene.create(chapter=chapter, sequence=1, prompt="scene1", duration=3.0)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await video_controller.merge_available_chapter_videos(chapter.id)
+
+    assert exc_info.value.status_code == 400
+    assert "当前没有可用于测试合成的视频" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_CLI配置_Seedance提交成功():
     novel = await Novel.create(name="CLI Seedance Novel", author="Author")
     chapter = await Chapter.create(novel=novel, number=1, name="第1章", content="内容")
@@ -292,6 +596,28 @@ async def test_CLI配置_Seedance提交成功():
     assert video.external_task_id == "cli-task-001"
     assert video.model_type == VideoModelTypeEnum.seedance.value
     assert video.status == TaskStatusEnum.pending.value
+
+
+@pytest.mark.asyncio
+async def test_CLI提交_返回submit_id也能成功识别():
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance2.0",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {"submit_id": "submit-456"}
+
+        task_id = await generator.submit(prompt="测试提示词", duration=6.0)
+
+    assert task_id == "submit-456"
 
 
 @pytest.mark.asyncio

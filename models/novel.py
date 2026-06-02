@@ -18,6 +18,7 @@ class Novel(AbstractBaseModel):
     cover = fields.CharField(max_length=255, description="封面", blank=True, null=True)
     description = fields.TextField(description="描述", blank=True, null=True)
     content = fields.TextField(description="内容", blank=True, null=True)
+    style = fields.JSONField(description="关联风格", null=True)
     total_chapters = fields.IntField(default=0, description="总章节数")
 
     chapters: fields.ReverseRelation["Chapter"]

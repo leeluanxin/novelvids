@@ -17,6 +17,7 @@ export const StepMerge = ({ chapterId }: StepMergeProps) => {
   const [items, setItems] = useState<ChapterVideoItem[]>([])
   const [loading, setLoading] = useState(true)
   const [merging, setMerging] = useState(false)
+  const [testMerging, setTestMerging] = useState(false)
   const [showOnlyWithVideo, setShowOnlyWithVideo] = useState(true)
   const [mergedResult, setMergedResult] = useState<VideoMergeOut | null>(null)
 
@@ -54,6 +55,8 @@ export const StepMerge = ({ chapterId }: StepMergeProps) => {
 
   // 所有分镜的总时长（不管是否有视频）
   const totalDuration = items.reduce((sum, item) => sum + (item.duration || 0), 0)
+  const testMergeCount = items.filter((i) => i.video !== null).length
+  const canTestMerge = testMergeCount > 0
   // 所有分镜都有视频才能合并
   const canMerge = items.length > 0 && items.every((i) => i.video !== null)
 
@@ -72,6 +75,18 @@ export const StepMerge = ({ chapterId }: StepMergeProps) => {
       toast.error((err as Error).message || "合并失败")
     } finally {
       setMerging(false)
+    }
+  }
+
+  const handleTestMerge = async () => {
+    try {
+      setTestMerging(true)
+      const res = await api.testMergeChapterVideos({ chapter_id: chapterId })
+      setMergedResult(res.data)
+    } catch (err) {
+      toast.error((err as Error).message || "测试合成失败")
+    } finally {
+      setTestMerging(false)
     }
   }
 
@@ -99,6 +114,19 @@ export const StepMerge = ({ chapterId }: StepMergeProps) => {
           >
             {showOnlyWithVideo ? <Eye className="h-4 w-4 mr-2" /> : <EyeOff className="h-4 w-4 mr-2" />}
             {showOnlyWithVideo ? "显示全部" : "只看有视频"}
+          </Button>
+          <Button variant="secondary" onClick={handleTestMerge} disabled={testMerging || !canTestMerge}>
+            {testMerging ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                测试合成中...
+              </>
+            ) : (
+              <>
+                <Link2 className="h-4 w-4 mr-2" />
+                测试合成
+              </>
+            )}
           </Button>
           <Button onClick={handleMerge} disabled={merging || !canMerge}>
             {merging ? (

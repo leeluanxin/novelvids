@@ -160,7 +160,7 @@ def _extract_video_urls(output: object) -> list[str]:
 
 def _extract_task_id(output: object) -> str | None:
     if isinstance(output, dict):
-        for key in ("task_id", "taskId", "job_id", "jobId", "id"):
+        for key in ("submit_id", "submitId", "task_id", "taskId", "job_id", "jobId", "id"):
             value = output.get(key)
             if isinstance(value, (str, int)) and str(value).strip():
                 return str(value)
@@ -482,6 +482,13 @@ class SeedanceGenerator(BaseVideoGenerator):
                 output = inline_result.get("output")
                 raw_status = inline_result.get("raw_status")
                 video_urls = inline_result.get("video_urls") or []
+                logger.info(
+                    "Dreamina CLI query inline result: task_id=%s, raw_status=%s, video_urls=%d, output=%s",
+                    external_task_id,
+                    raw_status,
+                    len(video_urls),
+                    _clip_for_log(output),
+                )
             else:
                 try:
                     output = await _run_cli_json(
@@ -495,6 +502,13 @@ class SeedanceGenerator(BaseVideoGenerator):
 
                 raw_status = _extract_raw_status(output)
                 video_urls = _extract_video_urls(output)
+                logger.info(
+                    "Dreamina CLI query output: task_id=%s, raw_status=%s, video_urls=%d, output=%s",
+                    external_task_id,
+                    raw_status,
+                    len(video_urls),
+                    _clip_for_log(output),
+                )
 
             status = _map_cli_status(raw_status)
             if video_urls and status != TaskStatusEnum.failed:

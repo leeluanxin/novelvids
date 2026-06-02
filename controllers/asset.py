@@ -63,6 +63,8 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
     async def reference(self, asset_id: int) -> AiTask:
         """提交参考图生成任务。"""
         asset = await self.get(asset_id)
+        await asset.fetch_related("novel")
+        style = asset.novel.style if getattr(asset, "novel", None) else None
 
         # 1. 获取任务配置
         config = await ai_model_config_controller.get_active(
@@ -89,6 +91,7 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         request_params = {
             "asset_id": asset.id,
             "novel_id": asset.novel_id,
+            "style": style,
             "invocation_type": config.invocation_type,
             "cli_command": config.cli_command,
             "base_url": config.base_url,

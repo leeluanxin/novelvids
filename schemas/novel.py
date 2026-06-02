@@ -1,9 +1,28 @@
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import Literal, Optional
 from schemas._base import BaseResponse
 
 
 # --- 核心业务属性 (Internal Mixins) ---
+
+class StyleBinding(BaseModel):
+    id: str = Field(..., description="风格ID", max_length=255)
+    name: str = Field(..., description="风格名称", max_length=255)
+    source: Literal["builtin", "custom"] = Field(..., description="风格来源")
+    builtin_key: Optional[Literal["reference-default", "storyboard-default"]] = Field(
+        None,
+        description="内置风格标识",
+    )
+    positive_prompt: Optional[str] = Field(None, description="正向提示词")
+    reference_image: Optional[str] = Field(None, description="参考图URL")
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def normalize_source(cls, value):
+        if value == "local":
+            return "custom"
+        return value
+
 
 class NovelProperties(BaseModel):
     """
@@ -14,6 +33,7 @@ class NovelProperties(BaseModel):
     author: Optional[str] = Field(None, description="作者", max_length=255)
     description: Optional[str] = Field(None, description="描述")
     cover: Optional[str] = Field(None, description="封面图URL")
+    style: Optional[StyleBinding] = Field(None, description="关联风格")
     total_chapters: Optional[int] = Field(None, description="总章节数")
 
 class NovelFullProperties(NovelProperties):

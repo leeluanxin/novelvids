@@ -38,6 +38,7 @@ async def get_video_list(params: QueryParams = Depends(get_list_params)):
 @router.get("/{video_id}", summary="获取视频详情", response_model=ResponseSchema[VideoOut])
 async def get_video(video_id: int):
     video = await video_controller.get(video_id)
+    video = await video_controller._refresh_video_status_on_read(video)
     return ResponseSchema(data=video)
 
 
@@ -50,6 +51,12 @@ async def delete_video(video_id: int):
 @router.post("/merge", summary="合并章节视频", response_model=ResponseSchema[VideoMergeOut])
 async def merge_chapter_videos(req: VideoMergeRequest):
     result = await video_controller.merge_chapter_videos(req.chapter_id)
+    return ResponseSchema(data=result)
+
+
+@router.post("/merge/test", summary="测试合并章节视频", response_model=ResponseSchema[VideoMergeOut])
+async def test_merge_chapter_videos(req: VideoMergeRequest):
+    result = await video_controller.merge_available_chapter_videos(req.chapter_id)
     return ResponseSchema(data=result)
 
 

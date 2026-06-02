@@ -25,10 +25,16 @@ from services.ai_task_executor import ai_task_executor
 from services.extraction.handler import ExtractionTaskHandler
 from services.reference.handler import AssetReferenceHandler
 from services.storyboard.handler import StoryboardTaskHandler
-from utils.db_compat import migrate_ai_model_configs_sqlite
+from utils.db_compat import (
+    migrate_ai_model_configs_sqlite,
+    migrate_novels_style_sqlite,
+    migrate_style_presets_sqlite,
+)
 from utils.enums import AiTaskTypeEnum
 
 migrate_ai_model_configs_sqlite(settings.DATABASE_URL)
+migrate_novels_style_sqlite(settings.DATABASE_URL)
+migrate_style_presets_sqlite(settings.DATABASE_URL)
 
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
