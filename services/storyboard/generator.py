@@ -64,9 +64,9 @@ def build_storyboard_user_prompt(
     require_json: bool = False,
 ) -> str:
     if user_prompt_override and user_prompt_override.strip():
-        return user_prompt_override.strip()
-
-    base_prompt = f'''### NARRATIVE TEXT TO PROCESS
+        base_prompt = user_prompt_override.strip()
+    else:
+        base_prompt = f'''### NARRATIVE TEXT TO PROCESS
 """
 {long_text}
 """
