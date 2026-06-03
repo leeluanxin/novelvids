@@ -122,13 +122,12 @@ class StoryboardTaskHandler(BaseTaskHandler):
                 "sound_design": shot.sound_design
             }
 
-            # 解析 duration 为浮点数
-            duration_value = float(shot.duration.replace("s", ""))
+            duration_value = float(shot.duration)
 
             # 构建 metadata，包含 API 元数据
             scene_metadata = {
                 "shot_title": shot.description,
-                "duration_str": shot.duration,
+                "duration": shot.duration,
                 "sequence_id": shot.sequence,
                 "storyboard_style": storyboard_style,
                 "actual_prompts": actual_prompts,

@@ -1,7 +1,7 @@
 # 生成视频分镜
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Any, Literal, Optional
+from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import Any, Optional
 from schemas._base import BaseResponse
 from utils.enums import AssetTypeEnum, TaskStatusEnum
 
@@ -31,7 +31,20 @@ class SoraScenePromptConfig(BaseModel):
     """生成视频分镜的提示词配置 - Sora"""
     sequence: int = Field(..., description="分镜序列号")
     description: str = Field(..., description="分镜标题，简短有力，如 'The Revelation'")
-    duration: Literal["4s", "8s"] = Field(..., description="时长，推荐4s以获得最佳指令依从性")
+    duration: float = Field(..., description="时长，单位秒，支持整数或小数")
+
+    @field_validator("duration", mode="before")
+    @classmethod
+    def normalize_duration(cls, value: Any) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized.endswith("s"):
+                normalized = normalized[:-1].strip()
+            return float(normalized)
+        raise TypeError("duration must be a number or numeric string")
+
     # --- 核心内容 ---
     visual_prose: str = Field(
         ...,

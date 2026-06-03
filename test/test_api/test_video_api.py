@@ -51,6 +51,38 @@ async def test_api_生成视频(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_api_生成视频_替换已有视频(client: AsyncClient):
+    scene, _ = await _setup_video_data()
+    existing_video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.viduq2.value,
+        external_task_id="old-task",
+        status=TaskStatusEnum.completed.value,
+        url="/media/videos/old.mp4",
+        metadata={"duration": 6.0},
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "api-task-002"
+        mock_factory.return_value = mock_gen
+
+        resp = await client.post("/api/video/generate/", json={
+            "scene_id": scene.id,
+            "model_type": VideoModelTypeEnum.veo3.value,
+        })
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["id"] == existing_video.id
+    assert data["external_task_id"] == "api-task-002"
+    assert data["status"] == TaskStatusEnum.pending.value
+    assert data["url"] is None
+    assert data["metadata"] == {}
+    assert await Video.filter(scene_id=scene.id).count() == 1
+
+
+@pytest.mark.asyncio
 async def test_api_查询视频状态(client: AsyncClient):
     """GET /api/video/query/{id} 返回进度。"""
     scene, config = await _setup_video_data()
@@ -106,6 +138,31 @@ async def test_api_获取视频列表(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_api_获取小说视频列表_同一分镜只返回当前视频(client: AsyncClient):
+    scene, _ = await _setup_video_data()
+    await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.viduq2.value,
+        status=TaskStatusEnum.completed.value,
+        url="https://cdn.example.com/1.mp4",
+    )
+    latest_video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.veo3.value,
+        status=TaskStatusEnum.pending.value,
+        external_task_id="novel-list-task",
+    )
+
+    resp = await client.get(f"/api/video/novel/{scene.chapter.novel_id}")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert len(data) == 1
+    assert data[0]["id"] == latest_video.id
+    assert data[0]["status"] == TaskStatusEnum.pending.value
+    assert data[0]["model_type"] == VideoModelTypeEnum.veo3.value
+
+
+@pytest.mark.asyncio
 async def test_api_获取视频详情(client: AsyncClient):
     """GET /api/video/{id} 返回完整信息。"""
     scene, _ = await _setup_video_data()
@@ -155,5 +212,5 @@ async def test_api_生成视频_无配置(client: AsyncClient):
     })
     body = resp.json()
     assert body["code"] == 404
-    assert "未配置" in body["message"]
+    assert "启用一个模型" in body["message"]
     print(f"    API 无配置: code={body['code']}, message={body['message']}")

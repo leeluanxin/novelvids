@@ -1,8 +1,36 @@
 import json
-from typing import List
+import logging
+from typing import Any, List
 from openai import AsyncOpenAI, BadRequestError
 
 from schemas.scene import SceneEntity, Storyboard
+
+
+logger = logging.getLogger(__name__)
+
+
+def _coerce_storyboard_payload(payload: Any) -> Storyboard:
+    if isinstance(payload, list):
+        logger.warning("[storyboard] wrapping bare shots array into Storyboard payload")
+        return Storyboard.model_validate({"shots": payload})
+    return Storyboard.model_validate(payload)
+
+
+def _parse_storyboard_content(content: str) -> Storyboard:
+    try:
+        return _coerce_storyboard_payload(json.loads(content))
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(content):
+            if char not in "[{":
+                continue
+            try:
+                payload, _ = decoder.raw_decode(content[index:])
+            except json.JSONDecodeError:
+                continue
+            logger.warning("[storyboard] recovered JSON payload from mixed model output")
+            return _coerce_storyboard_payload(payload)
+        raise
 
 
 def build_storyboard_system_prompt(
@@ -49,7 +77,7 @@ You must act like a film director using professional equipment. Fill the specifi
 
 {style_section}
 ### 4. SHOT STRUCTURE
-- Duration: Strictly 4s or 8s.
+- Duration: Use a numeric duration in seconds. Any positive number is allowed (for example 3, 4, 4.5, 8).
 - Pacing: Break long scenes into multiple cuts.
 - Actions: precise timestamps (0.0s-2.0s).
 
@@ -85,7 +113,7 @@ The JSON must match this schema exactly:
     {{
       "sequence": 1,
       "description": "...",
-      "duration": "4s",
+      "duration": 4,
       "visual_prose": "...",
       "actions": ["0.0s-2.0s: ..."],
       "format_and_look": "...",
@@ -127,6 +155,56 @@ def build_storyboard_messages(
     ]
 
 
+def _serialize_completion(completion) -> dict[str, Any]:
+    raw_content = None
+    choices_payload = []
+
+    for choice in getattr(completion, "choices", []) or []:
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        parsed = getattr(message, "parsed", None)
+        refusal = getattr(message, "refusal", None)
+        if raw_content is None and content:
+            raw_content = content
+
+        choices_payload.append(
+            {
+                "index": getattr(choice, "index", None),
+                "finish_reason": getattr(choice, "finish_reason", None),
+                "message": {
+                    "role": getattr(message, "role", None) if message else None,
+                    "content": content,
+                    "parsed": parsed.model_dump() if hasattr(parsed, "model_dump") else parsed,
+                    "refusal": refusal,
+                },
+            }
+        )
+
+    usage = getattr(completion, "usage", None)
+    usage_payload = None
+    if usage:
+        usage_payload = {
+            "prompt_tokens": getattr(usage, "prompt_tokens", None),
+            "completion_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
+            usage_payload["prompt_tokens_details"] = usage.prompt_tokens_details.model_dump()
+        if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
+            usage_payload["completion_tokens_details"] = usage.completion_tokens_details.model_dump()
+
+    return {
+        "id": getattr(completion, "id", None),
+        "model": getattr(completion, "model", None),
+        "created": getattr(completion, "created", None),
+        "service_tier": getattr(completion, "service_tier", None),
+        "system_fingerprint": getattr(completion, "system_fingerprint", None),
+        "choices": choices_payload,
+        "usage": usage_payload,
+        "raw_content": raw_content,
+    }
+
+
 async def generate_storyboard(
     client: AsyncOpenAI,
     long_text: str,
@@ -149,6 +227,18 @@ async def generate_storyboard(
         system_prompt_override=system_prompt_override,
         user_prompt_override=user_prompt_override,
     )
+    request_log = {
+        "model": model,
+        "base_url": str(getattr(client, "base_url", "")),
+        "messages": messages,
+        "style_prompt": style_prompt,
+        "system_prompt_override": system_prompt_override,
+        "user_prompt_override": user_prompt_override,
+        "max_completion_tokens": 10000,
+        "timeout": 600,
+        "structured_output": True,
+    }
+    logger.info("[storyboard] request=%s", json.dumps(request_log, ensure_ascii=False))
 
     def build_metadata(completion) -> dict:
         metadata = {
@@ -184,37 +274,54 @@ async def generate_storyboard(
             timeout=600,
             max_completion_tokens=10000,
         )
+        logger.info(
+            "[storyboard] structured_response=%s",
+            json.dumps(_serialize_completion(completion), ensure_ascii=False),
+        )
         return completion.choices[0].message.parsed, build_metadata(completion)
     except BadRequestError as exc:
         error_message = str(exc)
+        logger.warning("[storyboard] structured_request_failed error=%s", error_message)
         if "response_format" not in error_message and "response_format type is unavailable" not in error_message:
             raise
 
+    fallback_messages = build_storyboard_messages(
+        long_text=long_text,
+        entities=entities,
+        style_prompt=style_prompt,
+        system_prompt_override=system_prompt_override,
+        user_prompt_override=user_prompt_override,
+        require_json=True,
+    )
+    fallback_request_log = {
+        "model": model,
+        "base_url": str(getattr(client, "base_url", "")),
+        "messages": fallback_messages,
+        "style_prompt": style_prompt,
+        "system_prompt_override": system_prompt_override,
+        "user_prompt_override": user_prompt_override,
+        "max_completion_tokens": 10000,
+        "timeout": 600,
+        "structured_output": False,
+        "fallback_json": True,
+    }
+    logger.info("[storyboard] fallback_request=%s", json.dumps(fallback_request_log, ensure_ascii=False))
+
     completion = await client.chat.completions.create(
         model=model,
-        messages=build_storyboard_messages(
-            long_text=long_text,
-            entities=entities,
-            style_prompt=style_prompt,
-            system_prompt_override=system_prompt_override,
-            user_prompt_override=user_prompt_override,
-            require_json=True,
-        ),
+        messages=fallback_messages,
         timeout=600,
         max_completion_tokens=10000,
+    )
+    logger.info(
+        "[storyboard] fallback_response=%s",
+        json.dumps(_serialize_completion(completion), ensure_ascii=False),
     )
 
     content = completion.choices[0].message.content or ""
     if not content:
         raise ValueError("Storyboard model returned empty content")
 
-    try:
-        storyboard = Storyboard.model_validate_json(content)
-    except Exception:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start == -1 or end == -1 or end < start:
-            raise
-        storyboard = Storyboard.model_validate(json.loads(content[start:end + 1]))
+    storyboard = _parse_storyboard_content(content)
 
     return storyboard, build_metadata(completion)

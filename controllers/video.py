@@ -77,6 +77,9 @@ class VideoController(CRUDBase[Video, dict, dict]):
             )
             return video
 
+    async def _get_latest_scene_video(self, scene_id: int) -> Video | None:
+        return await Video.filter(scene_id=scene_id).order_by("-id").first()
+
     async def generate(self, req: VideoGenerateRequest) -> Video:
         """提交视频生成请求。
 
@@ -84,7 +87,7 @@ class VideoController(CRUDBase[Video, dict, dict]):
         2. 根据 model_type 查找启用的 AiModelConfig
         3. 解析 prompt 中的 @资产昵称 -> subjects
         4. 调用生成器 submit()
-        5. 创建 Video 记录 (status=pending)
+        5. 复用或创建当前 Scene 的 Video 记录 (status=pending)
         """
         scene = await Scene.get_or_none(id=req.scene_id)
         if not scene:
@@ -108,20 +111,29 @@ class VideoController(CRUDBase[Video, dict, dict]):
 
         # 获取生成器并提交
         generator = get_generator(req.model_type, config)
-        duration = scene.duration or 6.0
+        duration = scene.duration if scene.duration is not None else 6.0
         external_task_id = await generator.submit(
             prompt=prompt,
             subjects=subjects if subjects else None,
             duration=duration,
         )
 
-        # 创建 Video 记录
-        video = await Video.create(
-            scene_id=scene.id,
-            model_type=req.model_type,
-            external_task_id=external_task_id,
-            status=TaskStatusEnum.pending.value,
-        )
+        video = await self._get_latest_scene_video(scene.id)
+        if video is None:
+            video = await Video.create(
+                scene_id=scene.id,
+                model_type=req.model_type,
+                external_task_id=external_task_id,
+                status=TaskStatusEnum.pending.value,
+            )
+        else:
+            video.model_type = req.model_type
+            video.external_task_id = external_task_id
+            video.status = TaskStatusEnum.pending.value
+            video.url = None
+            video.metadata = {}
+            await video.save(update_fields=["model_type", "external_task_id", "status", "url", "metadata"])
+
         logger.info(
             "Video generate: video_id=%s, scene_id=%s, task_id=%s",
             video.id, scene.id, external_task_id,
@@ -219,7 +231,7 @@ class VideoController(CRUDBase[Video, dict, dict]):
         await super().remove(instance)
 
     async def _get_latest_completed_scene_video(self, scene_id: int) -> Video | None:
-        latest_video = await Video.filter(scene_id=scene_id).order_by("-id").first()
+        latest_video = await self._get_latest_scene_video(scene_id)
         refreshed_video = await self._refresh_video_status_on_read(latest_video)
         if refreshed_video and refreshed_video.status == TaskStatusEnum.completed.value:
             return refreshed_video
@@ -278,26 +290,26 @@ class VideoController(CRUDBase[Video, dict, dict]):
         return result
 
     async def get_novel_videos(self, novel_id: int) -> list[dict]:
-        """获取小说下所有视频。"""
-        videos = await Video.filter(
-            scene__chapter__novel_id=novel_id
-        ).order_by("-created_at")
+        """获取小说下每个分镜当前的视频。"""
+        scenes = await Scene.filter(chapter__novel_id=novel_id).order_by("-id")
 
-        refreshed_videos: list[Video] = []
-        for video in videos:
+        result = []
+        for scene in scenes:
+            video = await self._get_latest_scene_video(scene.id)
             refreshed_video = await self._refresh_video_status_on_read(video)
-            if refreshed_video is not None:
-                refreshed_videos.append(refreshed_video)
+            if refreshed_video is None:
+                continue
 
-        return [
-            {
-                "id": video.id,
-                "url": video.url,
-                "status": video.status,
-                "model_type": video.model_type,
-            }
-            for video in refreshed_videos
-        ]
+            result.append(
+                {
+                    "id": refreshed_video.id,
+                    "url": refreshed_video.url,
+                    "status": refreshed_video.status,
+                    "model_type": refreshed_video.model_type,
+                }
+            )
+
+        return result
 
     async def _collect_chapter_merge_videos(self, chapter_id: int) -> tuple[list[Video], float, list[int]]:
         scenes = await Scene.filter(chapter_id=chapter_id).order_by("sequence")

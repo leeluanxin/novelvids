@@ -30,6 +30,10 @@ MAX_REF_IMAGES = 4
 INLINE_RESULT_PREFIX = "cli-result:"
 
 
+def _normalize_seedance_duration(duration: float) -> int:
+    return min(15, max(4, int(round(duration))))
+
+
 async def _read_stream(stream) -> bytes:
     chunks: list[bytes] = []
     while True:
@@ -354,7 +358,7 @@ class SeedanceGenerator(BaseVideoGenerator):
 
             local_ref_images: list[str] = []
             try:
-                cli_duration = min(15, max(4, int(round(duration))))
+                cli_duration = _normalize_seedance_duration(duration)
                 args = [
                     "multimodal2video" if ref_images else "text2video",
                     f"--prompt={processed_prompt}",
@@ -448,7 +452,7 @@ class SeedanceGenerator(BaseVideoGenerator):
         payload: dict[str, Any] = {
             "model": model_name,
             "content": content,
-            "duration": int(duration),
+            "duration": _normalize_seedance_duration(duration),
             "watermark": False,
         }
 

@@ -88,6 +88,46 @@ async def test_生成视频_提交成功():
 
 
 @pytest.mark.asyncio
+async def test_生成视频_透传浮点时长():
+    scene, _ = await _create_scene_with_config()
+    scene.duration = 4.5
+    await scene.save(update_fields=["duration"])
+    req = VideoGenerateRequest(
+        scene_id=scene.id,
+        model_type=VideoModelTypeEnum.viduq2.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "ext-task-float-duration"
+        mock_factory.return_value = mock_gen
+
+        await video_controller.generate(req)
+
+    assert mock_gen.submit.await_args.kwargs["duration"] == 4.5
+
+
+@pytest.mark.asyncio
+async def test_生成视频_零时长不回退默认值():
+    scene, _ = await _create_scene_with_config()
+    scene.duration = 0.0
+    await scene.save(update_fields=["duration"])
+    req = VideoGenerateRequest(
+        scene_id=scene.id,
+        model_type=VideoModelTypeEnum.viduq2.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "ext-task-zero-duration"
+        mock_factory.return_value = mock_gen
+
+        await video_controller.generate(req)
+
+    assert mock_gen.submit.await_args.kwargs["duration"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_生成视频_分镜不存在():
     """分镜ID不存在时报 404。"""
     req = VideoGenerateRequest(
@@ -115,7 +155,7 @@ async def test_生成视频_无配置报404():
     with pytest.raises(HTTPException) as exc_info:
         await video_controller.generate(req)
     assert exc_info.value.status_code == 404
-    assert "未配置" in exc_info.value.detail
+    assert "启用一个模型" in exc_info.value.detail
     print(f"    无配置: {exc_info.value.detail}")
 
 
@@ -164,6 +204,39 @@ async def test_生成视频_解析资产引用():
 
     assert video.external_task_id == "ext-task-002"
     print(f"    解析资产引用: subjects={[s['name'] for s in subjects]}")
+
+
+@pytest.mark.asyncio
+async def test_生成视频_替换已有视频记录():
+    scene, _ = await _create_scene_with_config()
+    existing_video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.viduq2.value,
+        external_task_id="old-task",
+        status=TaskStatusEnum.completed.value,
+        url="/media/videos/old.mp4",
+        metadata={"duration": 6.0},
+    )
+    req = VideoGenerateRequest(
+        scene_id=scene.id,
+        model_type=VideoModelTypeEnum.veo3.value,
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "new-task-001"
+        mock_factory.return_value = mock_gen
+
+        video = await video_controller.generate(req)
+
+    assert video.id == existing_video.id
+    assert video.scene_id == scene.id
+    assert video.model_type == VideoModelTypeEnum.veo3.value
+    assert video.external_task_id == "new-task-001"
+    assert video.status == TaskStatusEnum.pending.value
+    assert video.url is None
+    assert video.metadata == {}
+    assert await Video.filter(scene_id=scene.id).count() == 1
 
 
 # =====================================================================
@@ -325,6 +398,30 @@ async def test_小说视频列表_补查失败时返回本地状态():
     assert result[0]["status"] == TaskStatusEnum.running.value
     assert result[0]["url"] is None
     mock_query.assert_awaited_once_with(video.id)
+
+
+@pytest.mark.asyncio
+async def test_小说视频列表_同一分镜只返回当前视频():
+    scene, _ = await _create_scene_with_config()
+    await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.viduq2.value,
+        status=TaskStatusEnum.completed.value,
+        url="/media/videos/old.mp4",
+    )
+    latest_video = await Video.create(
+        scene=scene,
+        model_type=VideoModelTypeEnum.veo3.value,
+        status=TaskStatusEnum.pending.value,
+        external_task_id="latest-task",
+    )
+
+    result = await video_controller.get_novel_videos(scene.chapter.novel_id)
+
+    assert len(result) == 1
+    assert result[0]["id"] == latest_video.id
+    assert result[0]["status"] == TaskStatusEnum.pending.value
+    assert result[0]["model_type"] == VideoModelTypeEnum.veo3.value
 
 
 @pytest.mark.asyncio
@@ -621,6 +718,63 @@ async def test_CLI提交_返回submit_id也能成功识别():
 
 
 @pytest.mark.asyncio
+async def test_CLI提交_浮点时长统一归一化():
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance2.0",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {"submit_id": "submit-789"}
+
+        task_id = await generator.submit(prompt="测试提示词", duration=4.5)
+
+    assert task_id == "submit-789"
+    mock_run.assert_awaited_once()
+    assert "--duration=4" in mock_run.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_API提交_浮点时长统一归一化():
+    from services.video.seedance import SeedanceGenerator
+    from unittest.mock import Mock
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="seedance-api",
+        base_url="https://mock.api.com",
+        api_key="sk-test",
+        model="seedance-t2v",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {"id": "api-task-789"}
+    response.raise_for_status.return_value = None
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.post.return_value = response
+
+    with patch("services.video.seedance.httpx.AsyncClient", return_value=client):
+        task_id = await generator.submit(prompt="测试提示词", duration=4.5)
+
+    assert task_id == "api-task-789"
+    client.post.assert_awaited_once()
+    assert client.post.await_args.kwargs["json"]["duration"] == 4
+
+
+@pytest.mark.asyncio
 async def test_CLI配置_非Seedance模型直接报错():
     config = await AiModelConfig.create(
         task_type=AiTaskTypeEnum.video.value,
@@ -770,7 +924,7 @@ async def test_查询视频_配置不存在():
     with pytest.raises(HTTPException) as exc_info:
         await video_controller.query_status(video.id)
     assert exc_info.value.status_code == 404
-    assert "配置不存在" in exc_info.value.detail
+    assert "请先在「配置」中" in exc_info.value.detail
     print(f"    配置不存在: {exc_info.value.detail}")
 
 

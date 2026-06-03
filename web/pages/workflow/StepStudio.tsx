@@ -39,7 +39,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const [scenes, setScenes] = useState<Scene[]>([])
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null)
   const [videos, setVideos] = useState<VideoType[]>([])
-  const [generating, setGenerating] = useState(false)
+  const [generatingSceneId, setGeneratingSceneId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedModel, setSelectedModel] = useState<number>(
     VideoModelTypeEnum.SEEDANCE
@@ -83,13 +83,18 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   }, [selectedScene?.id])
 
   const latestVideo = videos.length > 0 ? videos[0] : null
+  const isSelectedSceneGenerating =
+    selectedScene != null && generatingSceneId === selectedScene.id
 
   const handleGenerate = async () => {
     if (!selectedScene) return
+
+    const sceneId = selectedScene.id
+
     try {
-      setGenerating(true)
+      setGeneratingSceneId(sceneId)
       const res = await api.generateVideo({
-        scene_id: selectedScene.id,
+        scene_id: sceneId,
         model_type: selectedModel,
       })
       const newVideo = res.data
@@ -106,7 +111,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
     } catch (err) {
       toast.error((err as Error).message || "视频生成失败")
     } finally {
-      setGenerating(false)
+      setGeneratingSceneId((current) => (current === sceneId ? null : current))
     }
   }
 
@@ -269,9 +274,9 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
                 {/* Generate button */}
                 <Button
                   onClick={handleGenerate}
-                  disabled={generating}
+                  disabled={isSelectedSceneGenerating}
                 >
-                  {generating ? (
+                  {isSelectedSceneGenerating ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       生成中...
