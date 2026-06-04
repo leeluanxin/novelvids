@@ -23,7 +23,6 @@ from utils.enums import TaskStatusEnum
 
 logger = logging.getLogger(__name__)
 
-# 匹配 @{Name} 和 @Name（兼容旧格式）
 _ENTITY_RE = re.compile(r"@\{([^}]+)\}|@([\w一-鿿·]+)")
 
 MAX_REF_IMAGES = 4
@@ -236,31 +235,43 @@ def _decode_inline_result(token: str) -> dict[str, Any] | None:
     return data
 
 
-def _guess_file_extension(image_url: str, content_type: str | None = None) -> str:
-    path_ext = os.path.splitext(urlparse(image_url).path)[1].lower()
-    if path_ext in {".jpg", ".jpeg", ".png", ".webp"}:
+def _guess_file_extension(media_url: str, content_type: str | None = None) -> str:
+    path_ext = os.path.splitext(urlparse(media_url).path)[1].lower()
+    if path_ext:
         return path_ext
 
     if content_type:
         normalized = content_type.split(";", 1)[0].strip().lower()
-        if normalized == "image/jpeg":
-            return ".jpg"
-        if normalized == "image/png":
-            return ".png"
-        if normalized == "image/webp":
-            return ".webp"
+        content_type_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "video/mp4": ".mp4",
+            "video/quicktime": ".mov",
+            "video/webm": ".webm",
+            "audio/mpeg": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "audio/mp4": ".m4a",
+            "audio/aac": ".aac",
+            "audio/ogg": ".ogg",
+        }
+        if normalized in content_type_map:
+            return content_type_map[normalized]
 
-    return ".png"
+    return ".bin"
 
 
-async def _materialize_cli_image(image_url: str, index: int) -> str:
-    if image_url.startswith(("http://", "https://")):
+async def _materialize_cli_media(media_url: str, media_kind: str, index: int) -> str:
+    prefix = f"dreamina-{media_kind}-ref-{index}-"
+
+    if media_url.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.get(image_url)
+            response = await client.get(media_url)
             response.raise_for_status()
-            suffix = _guess_file_extension(image_url, response.headers.get("content-type"))
+            suffix = _guess_file_extension(media_url, response.headers.get("content-type"))
             with tempfile.NamedTemporaryFile(
-                prefix=f"dreamina-video-ref-{index}-",
+                prefix=prefix,
                 suffix=suffix,
                 dir=settings.MEDIA_PATH,
                 delete=False,
@@ -268,15 +279,15 @@ async def _materialize_cli_image(image_url: str, index: int) -> str:
                 tmp.write(response.content)
                 return tmp.name
 
-    if image_url.startswith("data:"):
-        header, _, data = image_url.partition(",")
+    if media_url.startswith("data:"):
+        header, _, data = media_url.partition(",")
         if not data:
-            raise Exception("CLI reference image data URL is invalid")
+            raise Exception(f"CLI reference {media_kind} data URL is invalid")
 
         mime_match = re.match(r"data:([^;]+)", header)
         suffix = _guess_file_extension("", mime_match.group(1) if mime_match else None)
         with tempfile.NamedTemporaryFile(
-            prefix=f"dreamina-video-ref-{index}-",
+            prefix=prefix,
             suffix=suffix,
             dir=settings.MEDIA_PATH,
             delete=False,
@@ -284,62 +295,89 @@ async def _materialize_cli_image(image_url: str, index: int) -> str:
             tmp.write(base64.b64decode(data))
             return tmp.name
 
-    if image_url.startswith("/media/"):
-        return os.path.join(settings.MEDIA_PATH, image_url[len("/media/"):])
+    if media_url.startswith("/media/"):
+        return os.path.join(settings.MEDIA_PATH, media_url[len("/media/"):])
 
-    if os.path.exists(image_url):
-        return image_url
+    if os.path.exists(media_url):
+        return media_url
 
-    raise Exception("CLI reference image must be a remote URL, data URL, or local file path")
+    raise Exception(
+        f"CLI reference {media_kind} must be a remote URL, data URL, or local file path"
+    )
 
 
 class SeedanceGenerator(BaseVideoGenerator):
-    """Seedance/即梦 平台视频生成。
-
-    Submit: POST {base_url}/contents/generations/tasks
-    Query:  GET  {base_url}/contents/generations/tasks/{task_id}
-    Auth:   Bearer {api_key}
-    """
+    """Seedance/即梦 平台视频生成。"""
 
     @staticmethod
     def _process_prompt(
         prompt: str,
         subjects: list[dict[str, Any]] | None,
-    ) -> tuple[str, list[str]]:
-        """处理 prompt 中的 @资产引用，返回 (处理后的 prompt, 参考图列表)。
-
-        规则:
-        - 收集所有资产的参考图，上限 MAX_REF_IMAGES 张
-        - 有参考图的资产: @{Name} -> [Name]
-        - 无参考图 / 超出上限的资产: @{Name} -> 资产描述文本
-        """
+    ) -> tuple[str, list[str], list[str], list[str]]:
         if not subjects:
-            return _ENTITY_RE.sub(lambda m: m.group(1) or m.group(2), prompt), []
+            return _ENTITY_RE.sub(lambda m: m.group(1) or m.group(2), prompt), [], [], []
 
-        subj_map: dict[str, dict[str, Any]] = {s["name"]: s for s in subjects}
+        subj_map: dict[str, dict[str, Any]] = {}
+        name_to_ref_index: dict[str, int] = {}
         ref_images: list[str] = []
-        name_to_index: dict[str, int] = {}
+        ref_videos: list[str] = []
+        ref_audios: list[str] = []
+        audio_primary_by_name: dict[str, str] = {}
+        primary_refs: list[tuple[str, str, int]] = []
 
         for subj in subjects:
-            if len(ref_images) >= MAX_REF_IMAGES:
-                break
-            images = subj.get("images", [])
+            subj_map[subj["name"]] = subj
+
+            images = _dedupe(list(subj.get("images") or []))
+            videos = _dedupe(list(subj.get("videos") or []))
+            audios = _dedupe(list(subj.get("audios") or []))
+
+            if audios:
+                ref_audios.extend(audios)
+
+            if len(primary_refs) >= MAX_REF_IMAGES:
+                continue
+
             if images:
                 ref_images.append(images[0])
-                name_to_index[subj["name"]] = len(ref_images)
+                primary_refs.append((subj["name"], "image", len(ref_images) - 1))
+            elif videos:
+                ref_videos.append(videos[0])
+                primary_refs.append((subj["name"], "video", len(ref_videos) - 1))
+            elif audios:
+                audio_primary_by_name[subj["name"]] = audios[0]
+                primary_refs.append((subj["name"], "audio", -1))
+
+        ref_audios = _dedupe(ref_audios)
+        audio_index_by_value: dict[str, int] = {}
+        for idx, audio in enumerate(ref_audios):
+            audio_index_by_value.setdefault(audio, idx)
+
+        image_offset = 0
+        video_offset = len(ref_images)
+        audio_offset = len(ref_images) + len(ref_videos)
+        for name, media_kind, local_index in primary_refs:
+            if media_kind == "image":
+                name_to_ref_index[name] = image_offset + local_index + 1
+            elif media_kind == "video":
+                name_to_ref_index[name] = video_offset + local_index + 1
+            else:
+                primary_audio = audio_primary_by_name.get(name)
+                if primary_audio is not None and primary_audio in audio_index_by_value:
+                    name_to_ref_index[name] = audio_offset + audio_index_by_value[primary_audio] + 1
 
         def _replace(m: re.Match) -> str:
             name = m.group(1) or m.group(2)
             subj = subj_map.get(name)
             if not subj:
                 return name
-            idx = name_to_index.get(subj["name"])
+            idx = name_to_ref_index.get(subj["name"])
             if idx is not None:
-                return f"[图{idx}]"
+                return f"[参考{idx}]"
             return subj.get("description") or subj["name"]
 
         processed = _ENTITY_RE.sub(_replace, prompt)
-        return processed, ref_images
+        return processed, ref_images, ref_videos, ref_audios
 
     async def submit(
         self,
@@ -350,38 +388,50 @@ class SeedanceGenerator(BaseVideoGenerator):
         aspect_ratio: str = "16:9",
         **kwargs,
     ) -> str:
-        processed_prompt, ref_images = self._process_prompt(prompt, subjects)
+        processed_prompt, ref_images, ref_videos, ref_audios = self._process_prompt(prompt, subjects)
+        has_visual_refs = bool(ref_images or ref_videos)
 
         if (self.config.invocation_type or "api").lower() == "cli":
             if not self.config.cli_command:
                 raise Exception("CLI video generation requires cli_command")
+            if ref_audios and not has_visual_refs:
+                raise Exception("即梦 CLI 的音频参考至少需要同时提供一张图片或一个视频参考")
 
-            local_ref_images: list[str] = []
+            local_ref_media: list[str] = []
             try:
                 cli_duration = _normalize_seedance_duration(duration)
                 args = [
-                    "multimodal2video" if ref_images else "text2video",
+                    "multimodal2video" if (has_visual_refs or ref_audios) else "text2video",
                     f"--prompt={processed_prompt}",
                     f"--duration={cli_duration}",
                     "--poll=120",
                 ]
-                if ref_images:
-                    args.append(f"--ratio={aspect_ratio}")
-                elif aspect_ratio:
+                if aspect_ratio:
                     args.append(f"--ratio={aspect_ratio}")
                 if self.config.model and self.config.model != "dreamina":
                     args.append(f"--model_version={self.config.model}")
-                for index, image_url in enumerate(ref_images[:MAX_REF_IMAGES], start=1):
-                    local_path = await _materialize_cli_image(image_url, index)
-                    local_ref_images.append(local_path)
+
+                for index, image_url in enumerate(ref_images, start=1):
+                    local_path = await _materialize_cli_media(image_url, "image", index)
+                    local_ref_media.append(local_path)
                     args.append(f"--image={local_path}")
+
+                for index, video_url in enumerate(ref_videos, start=1):
+                    local_path = await _materialize_cli_media(video_url, "video", index)
+                    local_ref_media.append(local_path)
+                    args.append(f"--video={local_path}")
+
+                for index, audio_url in enumerate(ref_audios, start=1):
+                    local_path = await _materialize_cli_media(audio_url, "audio", index)
+                    local_ref_media.append(local_path)
+                    args.append(f"--audio={local_path}")
 
                 output = await _run_cli_json(self.config.cli_command, args)
                 logger.info("Dreamina CLI submit output: %s", _clip_for_log(output))
             finally:
-                for local_path in local_ref_images:
+                for local_path in local_ref_media:
                     try:
-                        if os.path.basename(local_path).startswith("dreamina-video-ref-"):
+                        if os.path.basename(local_path).startswith("dreamina-"):
                             os.remove(local_path)
                     except FileNotFoundError:
                         pass
@@ -420,8 +470,8 @@ class SeedanceGenerator(BaseVideoGenerator):
         }
 
         logger.info(
-            "Seedance _process_prompt: subjects=%d, ref_images=%d, prompt[:80]=%r",
-            len(subjects or []), len(ref_images), processed_prompt[:80],
+            "Seedance _process_prompt: subjects=%d, ref_images=%d, ref_videos=%d, ref_audios=%d, prompt[:80]=%r",
+            len(subjects or []), len(ref_images), len(ref_videos), len(ref_audios), processed_prompt[:80],
         )
 
         model_name = self.config.model

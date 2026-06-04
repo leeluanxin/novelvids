@@ -105,8 +105,18 @@ class VideoController(CRUDBase[Video, dict, dict]):
         subjects = await resolve_assets(prompt, novel_id)
         logger.info(
             "Video resolve_assets: scene_id=%s, novel_id=%s, prompt_len=%d, subjects=%s",
-            scene.id, novel_id, len(prompt),
-            [(s["name"], len(s.get("images", []))) for s in subjects],
+            scene.id,
+            novel_id,
+            len(prompt),
+            [
+                (
+                    s["name"],
+                    len(s.get("images", [])),
+                    len(s.get("videos", [])),
+                    len(s.get("audios", [])),
+                )
+                for s in subjects
+            ],
         )
 
         # 获取生成器并提交

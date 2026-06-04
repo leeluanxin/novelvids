@@ -23,6 +23,9 @@ import {
   User,
   MapPin,
   Box,
+  Mic,
+  Play,
+  Video,
 } from "lucide-react"
 import { api } from "@/services/api"
 import type { Asset, AiTask } from "@/types"
@@ -69,6 +72,8 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
   const uploadRef1 = useRef<HTMLInputElement>(null)
   const uploadRef2 = useRef<HTMLInputElement>(null)
   const uploadRefMain = useRef<HTMLInputElement>(null)
+  const uploadRefAudio = useRef<HTMLInputElement>(null)
+  const uploadRefVideo = useRef<HTMLInputElement>(null)
   const [uploadingField, setUploadingField] = useState<string | null>(null)
 
   const loadAssets = async () => {
@@ -109,7 +114,7 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
   }
 
   const handleBatchGenerate = async () => {
-    const missing = assets.filter((a) => !a.main_image)
+    const missing = assets.filter((a) => a.asset_type !== AssetTypeEnum.GENERAL && !a.main_image)
     if (missing.length === 0) {
       toast.info("所有资产都已有主图")
       return
@@ -188,14 +193,20 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
   }
 
   // Upload handler for images (main + sub-reference)
-  const handleUpload = async (assetId: number, field: "main_image" | "angle_image_1" | "angle_image_2", file: File) => {
+  const handleUpload = async (assetId: number, field: "main_image" | "angle_image_1" | "angle_image_2" | "audio_url" | "video_url", file: File) => {
     setUploadingField(field)
     try {
       const res = await api.uploadFiles([file])
       const uploaded = res.data.files[0]
       const url = `/media/${uploaded.filename}`
       await api.updateAsset(assetId, { [field]: url })
-      toast.success("图片已上传")
+      toast.success(
+        field === "audio_url"
+          ? "音频已上传"
+          : field === "video_url"
+            ? "视频已上传"
+            : "图片已上传"
+      )
       await loadAssets()
     } catch (err) {
       toast.error((err as Error).message || "上传失败")
@@ -204,25 +215,112 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
     }
   }
 
-  // Group assets by type
-  const persons = assets.filter((a) => a.asset_type === AssetTypeEnum.PERSON)
-  const scenes = assets.filter((a) => a.asset_type === AssetTypeEnum.SCENE)
-  const items = assets.filter((a) => a.asset_type === AssetTypeEnum.ITEM)
-  const missingCount = assets.filter((a) => !a.main_image).length
+  const missingCount = assets.filter((a) => a.asset_type !== AssetTypeEnum.GENERAL && !a.main_image).length
 
   const sections = [
-    { label: "角色", icon: User, color: "border-blue-500", textColor: "text-blue-500", data: persons },
-    { label: "场景", icon: MapPin, color: "border-green-500", textColor: "text-green-500", data: scenes },
-    { label: "道具", icon: Box, color: "border-amber-500", textColor: "text-amber-500", data: items },
+    { label: "角色", icon: User, color: "border-blue-500", textColor: "text-blue-500", data: assets.filter((a) => a.asset_type === AssetTypeEnum.PERSON) },
+    { label: "场景", icon: MapPin, color: "border-green-500", textColor: "text-green-500", data: assets.filter((a) => a.asset_type === AssetTypeEnum.SCENE) },
+    { label: "道具", icon: Box, color: "border-amber-500", textColor: "text-amber-500", data: assets.filter((a) => a.asset_type === AssetTypeEnum.ITEM) },
+    { label: "通用", icon: Mic, color: "border-violet-500", textColor: "text-violet-500", data: assets.filter((a) => a.asset_type === AssetTypeEnum.GENERAL) },
   ]
 
   const renderAssetCard = (asset: Asset) => {
-    const isProcessing = processingIds.has(asset.id)
+    const isGeneral = asset.asset_type === AssetTypeEnum.GENERAL
     const hasImage = !!asset.main_image
+    const hasAudio = !!asset.audio_url
+    const hasVideo = !!asset.video_url
+
+    if (isGeneral) {
+      return (
+        <Card key={asset.id} className="overflow-hidden">
+          <div className="p-4 space-y-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center shrink-0">
+                <Mic className="h-5 w-5 text-muted-foreground" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm truncate">{asset.canonical_name}</span>
+                  {hasAudio && <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-lg border bg-secondary/20 p-3 space-y-2">
+                <div className="text-xs text-muted-foreground">音频参考</div>
+                {hasAudio ? (
+                  <audio controls className="w-full" src={asset.audio_url} />
+                ) : (
+                  <div className="h-10 rounded bg-secondary/40 flex items-center justify-center text-xs text-muted-foreground">
+                    暂无音频
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-lg border bg-secondary/20 p-3 space-y-2">
+                <div className="text-xs text-muted-foreground">视频参考</div>
+                {hasVideo ? (
+                  <video controls className="w-full rounded" src={asset.video_url} />
+                ) : (
+                  <div className="h-20 rounded bg-secondary/40 flex items-center justify-center text-xs text-muted-foreground">
+                    暂无视频
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={uploadingField === "audio_url"}
+                onClick={() => {
+                  uploadRefAudio.current?.setAttribute("data-asset-id", String(asset.id))
+                  uploadRefAudio.current?.click()
+                }}
+              >
+                <Upload className="h-3.5 w-3.5 mr-1" />
+                {hasAudio ? "重新上传音频" : "上传音频"}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={uploadingField === "video_url"}
+                onClick={() => {
+                  uploadRefVideo.current?.setAttribute("data-asset-id", String(asset.id))
+                  uploadRefVideo.current?.click()
+                }}
+              >
+                <Video className="h-3.5 w-3.5 mr-1" />
+                {hasVideo ? "重新上传视频" : "上传视频"}
+              </Button>
+              {hasAudio && (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={asset.audio_url} target="_blank" rel="noreferrer">
+                    <Play className="h-3.5 w-3.5 mr-1" />
+                    打开音频
+                  </a>
+                </Button>
+              )}
+              {hasVideo && (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={asset.video_url} target="_blank" rel="noreferrer">
+                    <Play className="h-3.5 w-3.5 mr-1" />
+                    打开视频
+                  </a>
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      )
+    }
+
+    const isProcessing = processingIds.has(asset.id)
 
     return (
       <Card key={asset.id} className="overflow-hidden group">
-        {/* Main image area */}
         <div className="relative aspect-square bg-secondary/30">
           {hasImage ? (
             <img
@@ -236,7 +334,6 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
             </div>
           )}
 
-          {/* Processing overlay */}
           {isProcessing && (
             <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
               <div className="text-center">
@@ -246,7 +343,6 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
             </div>
           )}
 
-          {/* Hover overlay with actions */}
           {!isProcessing && (
             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
               <Button
@@ -278,7 +374,6 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
           )}
         </div>
 
-        {/* Sub-reference images */}
         <div className="flex gap-1 px-2 pt-2">
           {[asset.angle_image_1, asset.angle_image_2].map((img, idx) => (
             <div
@@ -287,7 +382,6 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
               onClick={() => {
                 const ref = idx === 0 ? uploadRef1 : uploadRef2
                 ref.current?.click()
-                // Store which asset+field we're uploading to
                 ref.current?.setAttribute("data-asset-id", String(asset.id))
                 ref.current?.setAttribute("data-field", idx === 0 ? "angle_image_1" : "angle_image_2")
               }}
@@ -306,7 +400,6 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
           ))}
         </div>
 
-        {/* Info area */}
         <div className="p-3 space-y-2">
           <div className="flex items-center gap-2">
             <span className="font-bold text-sm truncate flex-1">{asset.canonical_name}</span>
@@ -412,6 +505,32 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
           el.value = ""
         }}
       />
+      <input
+        ref={uploadRefAudio}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          const el = e.target
+          const assetId = Number(el.getAttribute("data-asset-id"))
+          if (file && assetId) handleUpload(assetId, "audio_url", file)
+          el.value = ""
+        }}
+      />
+      <input
+        ref={uploadRefVideo}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          const el = e.target
+          const assetId = Number(el.getAttribute("data-asset-id"))
+          if (file && assetId) handleUpload(assetId, "video_url", file)
+          el.value = ""
+        }}
+      />
 
       {/* Loading state */}
       {loading ? (
@@ -484,16 +603,19 @@ export const StepAssets = ({ chapterId: _chapterId, novelId }: StepAssetsProps) 
                 rows={3}
               />
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">固有特征 (用于 Prompt)</label>
-              <Textarea
-                value={editForm.base_traits}
-                onChange={(e) => setEditForm((f) => ({ ...f, base_traits: e.target.value }))}
-                placeholder="英文特征描述，用于生成参考图"
-                rows={6}
-                className="font-mono text-sm"
-              />
-            </div>
+
+            {editingAsset?.asset_type !== AssetTypeEnum.GENERAL && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">固有特征 (用于 Prompt)</label>
+                <Textarea
+                  value={editForm.base_traits}
+                  onChange={(e) => setEditForm((f) => ({ ...f, base_traits: e.target.value }))}
+                  placeholder="英文特征描述，用于生成参考图"
+                  rows={6}
+                  className="font-mono text-sm"
+                />
+              </div>
+            )}
           </div>
 
           <DialogFooter>

@@ -1,4 +1,4 @@
-"""解析 prompt 中的 @资产昵称，查找匹配资产并收集参考图。"""
+"""解析 prompt 中的 @资产昵称，查找匹配资产并收集参考媒体。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,13 @@ import os
 import re
 from typing import Any
 
+from config import settings
 from models.asset import Asset
 from services.video.base import image_to_base64
-from config import settings
 
 logger = logging.getLogger(__name__)
 
-# 匹配 @{多字名称} 或 @单字名称（兼容旧格式）
-MENTION_PATTERN = re.compile(r"@\{([^}]+)\}|@([\w\u4e00-\u9fff·]+)")
+MENTION_PATTERN = re.compile(r"@\{([^}]+)\}|@([\w一-鿿·]+)")
 
 
 async def resolve_assets(prompt: str, novel_id: int) -> list[dict[str, Any]]:
@@ -24,7 +23,6 @@ async def resolve_assets(prompt: str, novel_id: int) -> list[dict[str, Any]]:
     if not mentions:
         return []
 
-    # 查找该小说下的所有资产（一次查询）
     assets = await Asset.filter(novel_id=novel_id).all()
     logger.info(
         "resolve_assets: novel_id=%s, total_assets=%d, names=%s",
@@ -39,16 +37,25 @@ async def resolve_assets(prompt: str, novel_id: int) -> list[dict[str, Any]]:
         if matched and matched.id not in seen_ids:
             seen_ids.add(matched.id)
             images = _collect_images(matched)
+            videos = _collect_media_paths(matched, ("video_url",))
+            audios = _collect_media_paths(matched, ("audio_url",))
             logger.info(
-                "resolve_assets: matched %r -> asset_id=%s, images=%d (main=%s, a1=%s, a2=%s)",
-                name, matched.id, len(images),
-                bool(matched.main_image), bool(matched.angle_image_1), bool(matched.angle_image_2),
+                "resolve_assets: matched %r -> asset_id=%s, images=%d, videos=%d, audios=%d",
+                name,
+                matched.id,
+                len(images),
+                len(videos),
+                len(audios),
             )
-            subjects.append({
-                "name": matched.canonical_name,
-                "images": images,
-                "description": matched.description or matched.base_traits or "",
-            })
+            subjects.append(
+                {
+                    "name": matched.canonical_name,
+                    "images": images,
+                    "videos": videos,
+                    "audios": audios,
+                    "description": matched.description or matched.base_traits or "",
+                }
+            )
         elif not matched:
             logger.warning("resolve_assets: mention %r not found in assets", name)
 
@@ -72,17 +79,42 @@ def _collect_images(asset: Asset) -> list[str]:
         path = getattr(asset, field_name, None)
         if not path:
             continue
-        # 远程 URL 直接使用
         if path.startswith(("http://", "https://")):
             images.append(path)
             continue
-        # /media/... 路径 → 转换为本地绝对路径再转 base64
-        if path.startswith("/media/"):
-            path = os.path.join(settings.MEDIA_PATH, path[len("/media/"):])
-        # 本地文件转 base64
-        try:
-            images.append(image_to_base64(path))
-        except FileNotFoundError:
-            logger.warning("resolve_assets: image not found: %s", path)
+        local_path = _resolve_local_media_path(path)
+        if not local_path:
             continue
+        try:
+            images.append(image_to_base64(local_path))
+        except FileNotFoundError:
+            logger.warning("resolve_assets: image not found: %s", local_path)
     return images
+
+
+def _collect_media_paths(asset: Asset, field_names: tuple[str, ...]) -> list[str]:
+    media_paths: list[str] = []
+    for field_name in field_names:
+        path = getattr(asset, field_name, None)
+        if not path:
+            continue
+        if path.startswith(("http://", "https://")):
+            media_paths.append(path)
+            continue
+        local_path = _resolve_local_media_path(path)
+        if not local_path:
+            continue
+        media_paths.append(path)
+    return media_paths
+
+
+def _resolve_local_media_path(path: str) -> str | None:
+    if path.startswith("/media/"):
+        local_path = os.path.join(settings.MEDIA_PATH, path[len("/media/"):])
+    else:
+        local_path = path
+
+    if not os.path.exists(local_path):
+        logger.warning("resolve_assets: media not found: %s", local_path)
+        return None
+    return local_path

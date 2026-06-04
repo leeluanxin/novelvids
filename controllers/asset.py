@@ -7,17 +7,32 @@ from tortoise.queryset import QuerySet
 from controllers.config import ai_model_config_controller
 from models.ai_task import AiTask
 from models.asset import Asset
-from schemas.asset import AssetCreate, AssetUpdate
+from schemas.asset import AssetCreate, AssetPatch, AssetUpdate
 from services.ai_task_executor import ai_task_executor
 from utils.crud import CRUDBase
-from utils.decorators import atomic
-from utils.enums import AiTaskTypeEnum, TaskStatusEnum
+from utils.enums import AiTaskTypeEnum, AssetTypeEnum, TaskStatusEnum
 from utils.page import QueryParams
+
+DEFAULT_GENERAL_ASSET_NAME = "旁白声音"
 
 
 class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
     def __init__(self):
         super().__init__(model=Asset)
+
+    async def _ensure_general_asset(self, novel_id: int) -> Asset:
+        asset, _ = await Asset.get_or_create(
+            novel_id=novel_id,
+            asset_type=AssetTypeEnum.general.value,
+            canonical_name=DEFAULT_GENERAL_ASSET_NAME,
+            defaults={
+                "aliases": [],
+                "description": "默认旁白声音资产",
+                "base_traits": None,
+                "is_global": True,
+            },
+        )
+        return asset
 
     async def list(
         self,
@@ -26,14 +41,18 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         search_fields: Optional[list[str]] = None,
         base_query: Optional["QuerySet"] = None,
     ) -> dict[str, dict[str, int | Any] | Any]:
-        """
-        重写 list 方法，支持通过 chapter_id 过滤 JSON 数组。
-        """
         if base_query is None:
             base_query = self.model.all()
 
-        # 处理 chapter_id 过滤（Python 端过滤 JSON 数组，兼容 SQLite）
-        # 前端传参: /api/asset?chapter_id=3
+        novel_id = None
+        if params.filters and "novel_id" in params.filters:
+            try:
+                novel_id = int(params.filters["novel_id"])
+            except (ValueError, TypeError):
+                novel_id = None
+        if novel_id is not None:
+            await self._ensure_general_asset(novel_id)
+
         if params.filters and "chapter_id" in params.filters:
             try:
                 chapter_id = int(params.filters.pop("chapter_id"))
@@ -44,7 +63,7 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
                 ]
                 base_query = base_query.filter(id__in=matching_ids)
             except (ValueError, TypeError):
-                pass  # 忽略无效的 chapter_id
+                pass
 
         return await super().list(params, response_model, search_fields, base_query)
 
@@ -52,7 +71,7 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         instance = await self.get(asset_id)
         return await super().update(instance, obj_in)
 
-    async def patch(self, asset_id: int, obj_in: AssetUpdate) -> Asset:
+    async def patch(self, asset_id: int, obj_in: AssetPatch) -> Asset:
         instance = await self.get(asset_id)
         return await super().patch(instance, obj_in)
 
@@ -61,33 +80,26 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         await super().remove(instance)
 
     async def reference(self, asset_id: int) -> AiTask:
-        """提交参考图生成任务。"""
         asset = await self.get(asset_id)
         await asset.fetch_related("novel")
         style = asset.novel.style if getattr(asset, "novel", None) else None
 
-        # 1. 获取任务配置
         config = await ai_model_config_controller.get_active(
             AiTaskTypeEnum.reference_image.value
         )
-
-        # 2. 清理超时异常任务
         await ai_task_executor.cleanup_stale_tasks(AiTaskTypeEnum.reference_image)
 
-        # 3. 检查活跃任务
         active_tasks = await AiTask.filter(
             task_type=AiTaskTypeEnum.reference_image.value,
             status__in=[TaskStatusEnum.pending.value, TaskStatusEnum.running.value],
         )
-        for t in active_tasks:
-            # 检查 request_params 中的 asset_id
-            if t.request_params.get("asset_id") == asset_id:
+        for task in active_tasks:
+            if task.request_params.get("asset_id") == asset_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"该资产已有进行中的生成任务（{t.id}）",
+                    detail=f"该资产已有进行中的生成任务（{task.id}）",
                 )
 
-        # 4. 提交任务
         request_params = {
             "asset_id": asset.id,
             "novel_id": asset.novel_id,
@@ -98,10 +110,10 @@ class AssetController(CRUDBase[Asset, AssetCreate, AssetUpdate]):
             "api_key": config.api_key,
             "model": config.model,
         }
-
-        task = await ai_task_executor.submit(
-            AiTaskTypeEnum.reference_image, request_params
+        return await ai_task_executor.submit(
+            AiTaskTypeEnum.reference_image,
+            request_params,
         )
-        return task
+
 
 asset_controller = AssetController()

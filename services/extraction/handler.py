@@ -15,6 +15,8 @@ from utils.enums import AssetTypeEnum
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GENERAL_ASSET_NAME = "旁白声音"
+
 # 提取器类型与 AssetTypeEnum 的映射
 EXTRACTOR_ASSET_MAP = [
     (PersonExtractor, AssetTypeEnum.person, "persons"),
@@ -69,7 +71,23 @@ class ExtractionTaskHandler(BaseTaskHandler):
             )
             summary[result_key] = saved
 
+        await self._ensure_general_assets(novel_id)
+
         return summary
+
+    async def _ensure_general_assets(self, novel_id: int) -> list[dict]:
+        asset, created = await Asset.get_or_create(
+            novel_id=novel_id,
+            asset_type=AssetTypeEnum.general.value,
+            canonical_name=DEFAULT_GENERAL_ASSET_NAME,
+            defaults={
+                "aliases": [],
+                "description": "默认旁白声音资产",
+                "base_traits": None,
+                "is_global": True,
+            },
+        )
+        return [{"name": asset.canonical_name, "action": "created" if created else "existing"}]
 
     async def _save_assets(
         self,

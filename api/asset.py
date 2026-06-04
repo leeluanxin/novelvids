@@ -57,3 +57,4 @@ async def asset_reference(asset_id: int, bg: BackgroundTasks):
     task = await asset_controller.reference(asset_id)
     bg.add_task(ai_task_executor.run, task)
     return ResponseSchema(data=task)
+

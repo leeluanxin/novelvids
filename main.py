@@ -29,12 +29,16 @@ from utils.db_compat import (
     migrate_ai_model_configs_sqlite,
     migrate_novels_style_sqlite,
     migrate_style_presets_sqlite,
+    migrate_assets_audio_fields_sqlite,
+    migrate_assets_video_fields_sqlite,
 )
 from utils.enums import AiTaskTypeEnum
 
 migrate_ai_model_configs_sqlite(settings.DATABASE_URL)
 migrate_novels_style_sqlite(settings.DATABASE_URL)
 migrate_style_presets_sqlite(settings.DATABASE_URL)
+migrate_assets_audio_fields_sqlite(settings.DATABASE_URL)
+migrate_assets_video_fields_sqlite(settings.DATABASE_URL)
 
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 

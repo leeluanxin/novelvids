@@ -200,3 +200,75 @@ def migrate_style_presets_sqlite(database_url: str) -> bool:
         raise
     finally:
         connection.close()
+
+
+def migrate_assets_audio_fields_sqlite(database_url: str) -> bool:
+    db_path = _sqlite_path_from_url(database_url)
+    if db_path is None or not db_path.exists():
+        return False
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = connection.execute("PRAGMA table_info(assets)").fetchall()
+        if not columns:
+            return False
+
+        column_names = {column[1] for column in columns}
+        missing_columns = []
+        if "audio_url" not in column_names:
+            missing_columns.append(("audio_url", "VARCHAR(500)"))
+        if "audio_duration" not in column_names:
+            missing_columns.append(("audio_duration", "REAL"))
+        if "audio_prompt" not in column_names:
+            missing_columns.append(("audio_prompt", "TEXT"))
+
+        if not missing_columns:
+            return False
+
+        _ensure_backup(db_path, "assets-audio-migration.bak")
+
+        connection.execute("BEGIN")
+        for column_name, column_type in missing_columns:
+            connection.execute(f"ALTER TABLE assets ADD COLUMN {column_name} {column_type}")
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def migrate_assets_video_fields_sqlite(database_url: str) -> bool:
+    db_path = _sqlite_path_from_url(database_url)
+    if db_path is None or not db_path.exists():
+        return False
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = connection.execute("PRAGMA table_info(assets)").fetchall()
+        if not columns:
+            return False
+
+        column_names = {column[1] for column in columns}
+        missing_columns = []
+        if "video_url" not in column_names:
+            missing_columns.append(("video_url", "VARCHAR(500)"))
+        if "video_duration" not in column_names:
+            missing_columns.append(("video_duration", "REAL"))
+
+        if not missing_columns:
+            return False
+
+        _ensure_backup(db_path, "assets-video-migration.bak")
+
+        connection.execute("BEGIN")
+        for column_name, column_type in missing_columns:
+            connection.execute(f"ALTER TABLE assets ADD COLUMN {column_name} {column_type}")
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()

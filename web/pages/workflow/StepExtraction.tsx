@@ -12,7 +12,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
-import { Sparkles, Loader2, User, MapPin, Box, Pencil, Trash2 } from "lucide-react"
+import { Sparkles, Loader2, User, MapPin, Box, Pencil, Trash2, Mic } from "lucide-react"
 import { api } from "@/services/api"
 import type { Asset, AiTask } from "@/types"
 import { AssetTypeEnum, TaskStatusEnum } from "@/types"
@@ -131,31 +131,34 @@ export const StepExtraction = ({ chapterId, novelId }: StepExtractionProps) => {
     }
   }
 
-  const persons = assets.filter((a) => a.asset_type === AssetTypeEnum.PERSON)
-  const scenes = assets.filter((a) => a.asset_type === AssetTypeEnum.SCENE)
-  const items = assets.filter((a) => a.asset_type === AssetTypeEnum.ITEM)
-
   const sections = [
     {
       label: "角色",
       icon: User,
       color: "border-blue-500",
       textColor: "text-blue-500",
-      data: persons,
+      data: assets.filter((a) => a.asset_type === AssetTypeEnum.PERSON),
     },
     {
       label: "场景",
       icon: MapPin,
       color: "border-green-500",
       textColor: "text-green-500",
-      data: scenes,
+      data: assets.filter((a) => a.asset_type === AssetTypeEnum.SCENE),
     },
     {
       label: "道具",
       icon: Box,
       color: "border-amber-500",
       textColor: "text-amber-500",
-      data: items,
+      data: assets.filter((a) => a.asset_type === AssetTypeEnum.ITEM),
+    },
+    {
+      label: "通用",
+      icon: Mic,
+      color: "border-violet-500",
+      textColor: "text-violet-500",
+      data: assets.filter((a) => a.asset_type === AssetTypeEnum.GENERAL),
     },
   ]
 
@@ -218,7 +221,11 @@ export const StepExtraction = ({ chapterId, novelId }: StepExtractionProps) => {
                         <CardContent className="p-4">
                           <div className="flex items-start gap-3">
                             {/* Thumbnail */}
-                            {asset.main_image ? (
+                            {asset.asset_type === AssetTypeEnum.GENERAL ? (
+                              <div className="w-12 h-12 rounded bg-secondary flex items-center justify-center flex-shrink-0">
+                                <Mic className="h-5 w-5 text-muted-foreground" />
+                              </div>
+                            ) : asset.main_image ? (
                               <img
                                 src={asset.main_image}
                                 alt={asset.canonical_name}

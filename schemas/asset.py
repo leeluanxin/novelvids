@@ -22,6 +22,12 @@ class AssetProperties(BaseModel):
     angle_image_1: Optional[str] = Field(None, description="可选参考图1")
     angle_image_2: Optional[str] = Field(None, description="可选参考图2")
     image_source: Optional[ImageSourceEnum] = Field(None, description=ImageSourceEnum.__doc__)
+    # 音频资产
+    audio_url: Optional[str] = Field(None, description="音频路径/URL")
+    audio_duration: Optional[float] = Field(None, description="音频时长（秒）")
+    # 视频资产
+    video_url: Optional[str] = Field(None, description="视频路径/URL")
+    video_duration: Optional[float] = Field(None, description="视频时长（秒）")
     # 状态追踪
     is_global: Optional[bool] = Field(None, description="是否全局资产")
     source_chapters: Optional[list[int]] = Field(None, description="出现的章节列表")

@@ -2,6 +2,7 @@ export enum AssetTypeEnum {
   PERSON = 1,
   SCENE = 2,
   ITEM = 3,
+  GENERAL = 4,
 }
 
 export enum TaskStatusEnum {
@@ -69,6 +70,10 @@ export interface Asset {
   main_image?: string;
   angle_image_1?: string;
   angle_image_2?: string;
+  audio_url?: string;
+  audio_duration?: number;
+  video_url?: string;
+  video_duration?: number;
   is_global?: boolean;
   created_at: string;
   updated_at: string;

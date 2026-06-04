@@ -10,11 +10,12 @@ if TYPE_CHECKING:
     from models.novel import Novel
     
 class Asset(AbstractBaseModel):
-    """通用资产模型 - 人物/场景/物品。
+    """通用资产模型 - 人物/场景/物品/通用。
 
     统一管理所有类型的资产，支持：
-    - 三种类型：person（人物）、scene（场景）、item（物品）
+    - 四种类型：person（人物）、scene（场景）、item（物品）、general（通用）
     - 图片资产：主图 + 2张可选角度图
+    - 音频资产：上传音频或 AI 生成音频
     - AI 生成或用户上传
     - 全局资产或单章资产
     """
@@ -38,6 +39,14 @@ class Asset(AbstractBaseModel):
     angle_image_1 = fields.CharField(max_length=500, null=True, description="可选参考图1")  # 角度图1
     angle_image_2 = fields.CharField(max_length=500, null=True, description="可选参考图2")  # 角度图2
     image_source = fields.IntField(default=ImageSourceEnum.ai.value, description="图片来源")
+
+    # 音频资产
+    audio_url = fields.CharField(max_length=500, null=True, description="音频路径/URL")
+    audio_duration = fields.FloatField(null=True, description="音频时长（秒）")
+
+    # 视频资产
+    video_url = fields.CharField(max_length=500, null=True, description="视频路径/URL")
+    video_duration = fields.FloatField(null=True, description="视频时长（秒）")
 
     # 状态追踪
     is_global = fields.BooleanField(default=True, description="是否全局资产")  # 是否全局资产

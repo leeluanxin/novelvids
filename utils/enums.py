@@ -51,6 +51,7 @@ class AssetTypeEnum(NicknameIntEnum):
     person = 1, "人物"
     scene = 2, "场景"
     item = 3, "物品"
+    general = 4, "通用"
 
 @enum_description
 class ImageSourceEnum(NicknameIntEnum):
