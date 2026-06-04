@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -33,6 +34,11 @@ from utils.db_compat import (
     migrate_assets_video_fields_sqlite,
 )
 from utils.enums import AiTaskTypeEnum
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 migrate_ai_model_configs_sqlite(settings.DATABASE_URL)
 migrate_novels_style_sqlite(settings.DATABASE_URL)

@@ -10,6 +10,7 @@ class VideoGenerateRequest(BaseModel):
     """提交视频生成请求"""
     scene_id: int = Field(..., description="分镜ID")
     model_type: VideoModelTypeEnum = Field(..., description=VideoModelTypeEnum.__doc__)
+    model_version: Optional[str] = Field(None, description="提供商具体模型版本")
 
 
 # --- 输出 Schema ---

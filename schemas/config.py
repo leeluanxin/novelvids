@@ -13,7 +13,7 @@ class AiModelConfigProperties(BaseModel):
 
     task_type: Optional[int] = Field(None, description=AiTaskTypeEnum.__doc__)
     name: Optional[str] = Field(None, description="配置名称", max_length=100)
-    invocation_type: Optional[Literal["api", "cli"]] = Field("api", description="调用方式")
+    invocation_type: Optional[Literal["api", "cli"]] = Field(None, description="调用方式")
     base_url: Optional[str] = Field(None, description="API 地址", max_length=500)
     api_key: Optional[str] = Field(None, description="API Key", max_length=500)
     model: Optional[str] = Field(None, description="模型名称", max_length=200)
@@ -25,7 +25,15 @@ class AiModelConfigProperties(BaseModel):
 class AiModelConfigInput(AiModelConfigProperties):
     @model_validator(mode="after")
     def validate_invocation_fields(self):
-        if self.invocation_type == "cli":
+        invocation_type = self.invocation_type
+        if invocation_type is None and self.task_type == AiTaskTypeEnum.video.value:
+            invocation_type = "cli"
+        elif invocation_type is None:
+            invocation_type = "api"
+
+        self.invocation_type = invocation_type
+
+        if invocation_type == "cli":
             if not self.cli_command:
                 raise ValueError("cli invocation requires cli_command")
         else:

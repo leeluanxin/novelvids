@@ -122,11 +122,40 @@ class VideoController(CRUDBase[Video, dict, dict]):
         # 获取生成器并提交
         generator = get_generator(req.model_type, config)
         duration = scene.duration if scene.duration is not None else 6.0
-        external_task_id = await generator.submit(
-            prompt=prompt,
-            subjects=subjects if subjects else None,
-            duration=duration,
-        )
+        invocation_type = (config.invocation_type or "cli").lower()
+        if invocation_type == "cli":
+            logger.info(
+                "Dreamina CLI submit start: scene_sequence=%s, scene_id=%s, model_type=%s, model_version=%s",
+                scene.sequence,
+                scene.id,
+                req.model_type,
+                req.model_version,
+            )
+        try:
+            external_task_id = await generator.submit(
+                prompt=prompt,
+                subjects=subjects if subjects else None,
+                duration=duration,
+                model_version=req.model_version,
+            )
+        except Exception:
+            if invocation_type == "cli":
+                logger.exception(
+                    "Dreamina CLI submit failed: scene_sequence=%s, scene_id=%s, model_type=%s, model_version=%s",
+                    scene.sequence,
+                    scene.id,
+                    req.model_type,
+                    req.model_version,
+                )
+            raise
+
+        if invocation_type == "cli":
+            logger.info(
+                "Dreamina CLI submit success: scene_sequence=%s, scene_id=%s, task_id=%s",
+                scene.sequence,
+                scene.id,
+                external_task_id,
+            )
 
         video = await self._get_latest_scene_video(scene.id)
         if video is None:

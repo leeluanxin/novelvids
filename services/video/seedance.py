@@ -390,8 +390,10 @@ class SeedanceGenerator(BaseVideoGenerator):
     ) -> str:
         processed_prompt, ref_images, ref_videos, ref_audios = self._process_prompt(prompt, subjects)
         has_visual_refs = bool(ref_images or ref_videos)
+        requested_model_version = kwargs.get("model_version")
+        selected_model_version = requested_model_version or self.config.model
 
-        if (self.config.invocation_type or "api").lower() == "cli":
+        if (self.config.invocation_type or "cli").lower() == "cli":
             if not self.config.cli_command:
                 raise Exception("CLI video generation requires cli_command")
             if ref_audios and not has_visual_refs:
@@ -408,8 +410,8 @@ class SeedanceGenerator(BaseVideoGenerator):
                 ]
                 if aspect_ratio:
                     args.append(f"--ratio={aspect_ratio}")
-                if self.config.model and self.config.model != "dreamina":
-                    args.append(f"--model_version={self.config.model}")
+                if selected_model_version and selected_model_version != "dreamina":
+                    args.append(f"--model_version={selected_model_version}")
 
                 for index, image_url in enumerate(ref_images, start=1):
                     local_path = await _materialize_cli_media(image_url, "image", index)
@@ -426,6 +428,8 @@ class SeedanceGenerator(BaseVideoGenerator):
                     local_ref_media.append(local_path)
                     args.append(f"--audio={local_path}")
 
+                full_command = [*shlex.split(self.config.cli_command), *args]
+                logger.info("Dreamina CLI submit command: %s", shlex.join(full_command))
                 output = await _run_cli_json(self.config.cli_command, args)
                 logger.info("Dreamina CLI submit output: %s", _clip_for_log(output))
             finally:
@@ -464,6 +468,9 @@ class SeedanceGenerator(BaseVideoGenerator):
 
             raise Exception("CLI video generation did not return task id or terminal result")
 
+        if not self.config.base_url or not self.config.api_key:
+            raise Exception("Seedance API invocation requires base_url and api_key")
+
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
@@ -474,15 +481,15 @@ class SeedanceGenerator(BaseVideoGenerator):
             len(subjects or []), len(ref_images), len(ref_videos), len(ref_audios), processed_prompt[:80],
         )
 
-        model_name = self.config.model
-        supports_images = "i2v" in model_name or "t2v" in model_name
-        if ref_images and "t2v" in model_name:
+        model_name = selected_model_version
+        supports_images = bool(model_name) and ("i2v" in model_name or "t2v" in model_name)
+        if model_name and ref_images and "t2v" in model_name:
             model_name = model_name.replace("t2v", "i2v")
             logger.info("Seedance auto-switch: t2v -> i2v (has images)")
-        elif not ref_images and "i2v" in model_name:
+        elif model_name and not ref_images and "i2v" in model_name:
             model_name = model_name.replace("i2v", "t2v")
             logger.info("Seedance auto-switch: i2v -> t2v (no images)")
-        elif ref_images and not supports_images:
+        elif model_name and ref_images and not supports_images:
             logger.warning(
                 "Seedance model %s does not support reference images, skipping %d images",
                 model_name, len(ref_images),
@@ -500,11 +507,12 @@ class SeedanceGenerator(BaseVideoGenerator):
             })
 
         payload: dict[str, Any] = {
-            "model": model_name,
             "content": content,
             "duration": _normalize_seedance_duration(duration),
             "watermark": False,
         }
+        if model_name:
+            payload["model"] = model_name
 
         async with httpx.AsyncClient(timeout=30) as client:
             url = f"{self.config.base_url}/contents/generations/tasks"
@@ -527,7 +535,7 @@ class SeedanceGenerator(BaseVideoGenerator):
         return task_id
 
     async def query(self, external_task_id: str) -> dict[str, Any]:
-        if (self.config.invocation_type or "api").lower() == "cli":
+        if (self.config.invocation_type or "cli").lower() == "cli":
             if not self.config.cli_command:
                 raise Exception("CLI video generation requires cli_command")
 
@@ -583,6 +591,9 @@ class SeedanceGenerator(BaseVideoGenerator):
                 raw_status=raw_status,
                 output=output,
             )
+
+        if not self.config.base_url or not self.config.api_key:
+            raise Exception("Seedance API invocation requires base_url and api_key")
 
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",

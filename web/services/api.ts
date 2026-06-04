@@ -1,6 +1,6 @@
 import type {
   Novel, Chapter, Asset, Scene, Video, AiModelConfig, AiTask, ChapterVideoItem, VideoMergeOut,
-  PaginationResponse, SingleResponse, AllEnums, StylePreset, ScenePromptPreview, SceneGeneratePayload,
+  PaginationResponse, SingleResponse, AllEnums, StylePreset, ScenePromptPreview, SceneGeneratePayload, VideoGeneratePayload,
 } from '../types';
 
 const BASE = '/api';
@@ -142,7 +142,7 @@ class ApiService {
   getNovelVideos(novelId: number): Promise<SingleResponse<Video[]>> {
     return request(`/video/novel/${novelId}`);
   }
-  generateVideo(data: { scene_id: number; model_type: number }): Promise<SingleResponse<Video>> {
+  generateVideo(data: VideoGeneratePayload): Promise<SingleResponse<Video>> {
     return request('/video/generate/', { method: 'POST', body: JSON.stringify(data) });
   }
   queryVideo(id: number): Promise<SingleResponse<Video>> {

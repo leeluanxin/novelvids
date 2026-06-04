@@ -1,15 +1,16 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
-  Select,
-  SelectTrigger,
-  SelectContent,
-  SelectItem,
-  SelectValue,
-} from "@/components/ui/select"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Film, Video, Loader2, RefreshCw, AlertCircle } from "lucide-react"
 import { api } from "@/services/api"
 import type { Scene, Video as VideoType } from "@/types"
@@ -20,6 +21,51 @@ import { sleep, statusLabel, statusColor, modelLabel } from "@/lib/helpers"
 interface StepStudioProps {
   chapterId: number
 }
+
+interface VideoGenerateOption {
+  key: string
+  label: string
+  description: string
+  modelType: VideoModelTypeEnum
+  modelVersion?: string
+}
+
+const VIDEO_GENERATE_OPTIONS: VideoGenerateOption[] = [
+  {
+    key: "seedance-fast",
+    label: "Seedance 2.0 Fast",
+    description: "默认推荐，出图更快",
+    modelType: VideoModelTypeEnum.SEEDANCE,
+    modelVersion: "seedance2.0fast",
+  },
+  {
+    key: "seedance-vip",
+    label: "Seedance 2.0 VIP",
+    description: "即梦高规格版本",
+    modelType: VideoModelTypeEnum.SEEDANCE,
+    modelVersion: "seedance2.0vip",
+  },
+  {
+    key: "veo-3",
+    label: "Veo 3",
+    description: "高质量生成",
+    modelType: VideoModelTypeEnum.VEO_3,
+  },
+  {
+    key: "sora-2",
+    label: "Sora 2",
+    description: "OpenAI 视频模型",
+    modelType: VideoModelTypeEnum.SORA_2,
+  },
+  {
+    key: "vidu-q2",
+    label: "Vidu Q2",
+    description: "轻量快速生成",
+    modelType: VideoModelTypeEnum.VIDU_Q2,
+  },
+]
+
+const DEFAULT_VIDEO_GENERATE_OPTION_KEY = VIDEO_GENERATE_OPTIONS[0].key
 
 async function pollVideo(videoId: number): Promise<VideoType> {
   while (true) {
@@ -39,11 +85,13 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const [scenes, setScenes] = useState<Scene[]>([])
   const [selectedScene, setSelectedScene] = useState<Scene | null>(null)
   const [videos, setVideos] = useState<VideoType[]>([])
-  const [generatingSceneId, setGeneratingSceneId] = useState<number | null>(null)
+  const [generatingSceneIds, setGeneratingSceneIds] = useState<number[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedModel, setSelectedModel] = useState<number>(
-    VideoModelTypeEnum.SEEDANCE
+  const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
+  const [selectedOptionKey, setSelectedOptionKey] = useState(
+    DEFAULT_VIDEO_GENERATE_OPTION_KEY
   )
+  const selectedSceneIdRef = useRef<number | null>(null)
 
   const loadScenes = async () => {
     try {
@@ -64,7 +112,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const loadVideos = async (sceneId: number) => {
     try {
       const res = await api.getVideos(1, 100, "-id", sceneId)
-      setVideos(res.data.items)
+      setVideos(mergeUniqueVideos(res.data.items))
     } catch (err) {
       toast.error((err as Error).message || "加载视频列表失败")
     }
@@ -75,6 +123,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   }, [chapterId])
 
   useEffect(() => {
+    selectedSceneIdRef.current = selectedScene?.id ?? null
     if (selectedScene) {
       loadVideos(selectedScene.id)
     } else {
@@ -84,34 +133,103 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
 
   const latestVideo = videos.length > 0 ? videos[0] : null
   const isSelectedSceneGenerating =
-    selectedScene != null && generatingSceneId === selectedScene.id
+    selectedScene != null && generatingSceneIds.includes(selectedScene.id)
+  const selectedGenerateOption = useMemo(
+    () =>
+      VIDEO_GENERATE_OPTIONS.find((option) => option.key === selectedOptionKey) ??
+      VIDEO_GENERATE_OPTIONS[0],
+    [selectedOptionKey]
+  )
+
+  const mergeUniqueVideos = (items: VideoType[]) => {
+    const seen = new Set<number>()
+    return items.filter((video) => {
+      if (seen.has(video.id)) {
+        return false
+      }
+      seen.add(video.id)
+      return true
+    })
+  }
+
+  const handleOpenGenerateDialog = () => {
+    if (selectedScene) {
+      console.info("[StepStudio] open generate dialog", {
+        sceneId: selectedScene.id,
+        sceneSequence: selectedScene.sequence,
+      })
+    }
+    setSelectedOptionKey(DEFAULT_VIDEO_GENERATE_OPTION_KEY)
+    setGenerateDialogOpen(true)
+  }
 
   const handleGenerate = async () => {
     if (!selectedScene) return
 
     const sceneId = selectedScene.id
+    const sceneSequence = selectedScene.sequence
+    const requestPayload = {
+      scene_id: sceneId,
+      model_type: selectedGenerateOption.modelType,
+      model_version: selectedGenerateOption.modelVersion,
+    }
 
     try {
-      setGeneratingSceneId(sceneId)
-      const res = await api.generateVideo({
-        scene_id: sceneId,
-        model_type: selectedModel,
+      console.info("[StepStudio] generate start", {
+        sceneId,
+        sceneSequence,
+        payload: requestPayload,
       })
-      const newVideo = res.data
-      setVideos((prev) => [newVideo, ...prev])
-      const finished = await pollVideo(newVideo.id)
-      setVideos((prev) =>
-        prev.map((v) => (v.id === finished.id ? finished : v))
+      setGenerateDialogOpen(false)
+      setGeneratingSceneIds((current) =>
+        current.includes(sceneId) ? current : [...current, sceneId]
       )
+      const res = await api.generateVideo(requestPayload)
+      const newVideo = res.data
+      console.info("[StepStudio] generate request success", {
+        sceneId,
+        sceneSequence,
+        videoId: newVideo.id,
+        externalTaskId: newVideo.external_task_id,
+        status: newVideo.status,
+      })
+      if (selectedSceneIdRef.current === sceneId) {
+        setVideos((prev) => mergeUniqueVideos([newVideo, ...prev]))
+      }
+      const finished = await pollVideo(newVideo.id)
+      console.info("[StepStudio] generate poll finished", {
+        sceneId,
+        sceneSequence,
+        videoId: finished.id,
+        status: finished.status,
+        url: finished.url,
+        metadata: finished.metadata,
+      })
+      if (selectedSceneIdRef.current === sceneId) {
+        setVideos((prev) =>
+          mergeUniqueVideos(prev.map((v) => (v.id === finished.id ? finished : v)))
+        )
+      }
+      const sceneLabel = scenes.find((scene) => scene.id === sceneId)?.sequence ?? sceneId
       if (finished.status === TaskStatusEnum.COMPLETED) {
-        toast.success("视频生成完成")
+        toast.success(`分镜 #${sceneLabel} 视频生成完成`)
       } else {
-        toast.error(finished.metadata?.error || "视频生成失败")
+        toast.error(finished.metadata?.error || `分镜 #${sceneLabel} 视频生成失败`)
       }
     } catch (err) {
+      console.error("[StepStudio] generate failed", {
+        sceneId,
+        sceneSequence,
+        payload: requestPayload,
+        error: err,
+      })
       toast.error((err as Error).message || "视频生成失败")
     } finally {
-      setGeneratingSceneId((current) => (current === sceneId ? null : current))
+      console.info("[StepStudio] generate cleanup", {
+        sceneId,
+        sceneSequence,
+      })
+      setGeneratingSceneIds((current) => current.filter((id) => id !== sceneId))
     }
   }
 
@@ -119,7 +237,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
     try {
       const res = await api.queryVideo(videoId)
       setVideos((prev) =>
-        prev.map((v) => (v.id === videoId ? res.data : v))
+        mergeUniqueVideos(prev.map((v) => (v.id === videoId ? res.data : v)))
       )
     } catch (err) {
       toast.error((err as Error).message || "刷新视频状态失败")
@@ -255,25 +373,9 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
 
               {/* Controls row */}
               <div className="flex items-center gap-3">
-                {/* Model selector */}
-                <Select
-                  value={String(selectedModel)}
-                  onValueChange={(v) => setSelectedModel(Number(v))}
-                >
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="选择模型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="4">Veo 3 (高质量)</SelectItem>
-                    <SelectItem value="2">Sora 2</SelectItem>
-                    <SelectItem value="1">Vidu Q2</SelectItem>
-                    <SelectItem value="3">Seedance</SelectItem>
-                  </SelectContent>
-                </Select>
-
                 {/* Generate button */}
                 <Button
-                  onClick={handleGenerate}
+                  onClick={handleOpenGenerateDialog}
                   disabled={isSelectedSceneGenerating}
                 >
                   {isSelectedSceneGenerating ? (
@@ -336,6 +438,57 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
             </div>
           </>
         )}
+        <Dialog open={generateDialogOpen} onOpenChange={setGenerateDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>选择视频模型</DialogTitle>
+              <DialogDescription>
+                默认推荐 Seedance 2.0 Fast，也可以切换到其他模型后再生成。
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              {VIDEO_GENERATE_OPTIONS.map((option) => {
+                const isSelected = option.key === selectedOptionKey
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`w-full rounded-lg border p-4 text-left transition-colors ${
+                      isSelected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/50"
+                    }`}
+                    onClick={() => setSelectedOptionKey(option.key)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium">{option.label}</div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          {option.description}
+                        </div>
+                      </div>
+                      {isSelected && <Badge>已选择</Badge>}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setGenerateDialogOpen(false)}
+                disabled={isSelectedSceneGenerating}
+              >
+                取消
+              </Button>
+              <Button onClick={handleGenerate} disabled={isSelectedSceneGenerating}>
+                开始生成
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

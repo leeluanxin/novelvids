@@ -41,6 +41,21 @@ async def test_创建cli配置_保存命令():
     assert config.api_key is None
 
 
+@pytest.mark.asyncio
+async def test_创建视频配置_默认走cli():
+    obj_in = AiModelConfigCreate(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-default-cli",
+        cli_command="dreamina",
+        model="seedance-pro",
+    )
+    config = await ai_model_config_controller.create(obj_in)
+    assert config.invocation_type == "cli"
+    assert config.cli_command == "dreamina"
+    assert config.base_url is None
+    assert config.api_key is None
+
+
 def test_api配置缺少base_url时校验失败():
     with pytest.raises(ValidationError):
         AiModelConfigCreate(

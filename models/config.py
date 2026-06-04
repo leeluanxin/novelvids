@@ -17,7 +17,7 @@ class AiModelConfig(AbstractBaseModel):
     )
     invocation_type = fields.CharField(
         max_length=20,
-        default="api",
+        default="cli",
         description="调用方式：api/cli",
     )
     base_url = fields.CharField(

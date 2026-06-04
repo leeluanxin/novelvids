@@ -664,6 +664,25 @@ async def test_测试合并章节视频_没有可用视频时报错():
 
 
 @pytest.mark.asyncio
+async def test_生成视频_透传模型版本():
+    scene, _ = await _create_scene_with_config(model_name="seedance")
+    req = VideoGenerateRequest(
+        scene_id=scene.id,
+        model_type=VideoModelTypeEnum.seedance.value,
+        model_version="seedance2.0fast",
+    )
+
+    with patch("controllers.video.get_generator") as mock_factory:
+        mock_gen = AsyncMock()
+        mock_gen.submit.return_value = "cli-task-model-version"
+        mock_factory.return_value = mock_gen
+
+        await video_controller.generate(req)
+
+    assert mock_gen.submit.await_args.kwargs["model_version"] == "seedance2.0fast"
+
+
+@pytest.mark.asyncio
 async def test_CLI配置_Seedance提交成功():
     novel = await Novel.create(name="CLI Seedance Novel", author="Author")
     chapter = await Chapter.create(novel=novel, number=1, name="第1章", content="内容")
@@ -693,6 +712,33 @@ async def test_CLI配置_Seedance提交成功():
     assert video.external_task_id == "cli-task-001"
     assert video.model_type == VideoModelTypeEnum.seedance.value
     assert video.status == TaskStatusEnum.pending.value
+
+
+@pytest.mark.asyncio
+async def test_CLI提交_优先使用请求模型版本():
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-cli",
+        invocation_type="cli",
+        cli_command="dreamina",
+        model="seedance2.0vip",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {"submit_id": "submit-override"}
+
+        task_id = await generator.submit(
+            prompt="测试提示词",
+            duration=6.0,
+            model_version="seedance2.0fast",
+        )
+
+    assert task_id == "submit-override"
+    assert "--model_version=seedance2.0fast" in mock_run.await_args.args[1]
 
 
 @pytest.mark.asyncio
@@ -739,6 +785,97 @@ async def test_CLI提交_浮点时长统一归一化():
     assert task_id == "submit-789"
     mock_run.assert_awaited_once()
     assert "--duration=4" in mock_run.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_视频配置默认cli时_Seedance仍走CLI提交():
+    from services.video.seedance import SeedanceGenerator
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="dreamina-default-cli",
+        cli_command="dreamina",
+        model="seedance2.0fast",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    with patch("services.video.seedance._run_cli_json", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = {"submit_id": "submit-default-cli"}
+
+        task_id = await generator.submit(prompt="测试提示词", duration=6.0)
+
+    assert config.invocation_type == "cli"
+    assert task_id == "submit-default-cli"
+    assert mock_run.await_args.args[0] == "dreamina"
+
+
+@pytest.mark.asyncio
+async def test_API提交_优先使用请求模型版本():
+    from services.video.seedance import SeedanceGenerator
+    from unittest.mock import Mock
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="seedance-api",
+        base_url="https://mock.api.com",
+        api_key="sk-test",
+        model="seedance2.0vip",
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {"id": "api-task-override"}
+    response.raise_for_status.return_value = None
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.post.return_value = response
+
+    with patch("services.video.seedance.httpx.AsyncClient", return_value=client):
+        task_id = await generator.submit(
+            prompt="测试提示词",
+            duration=6.0,
+            model_version="seedance2.0fast",
+        )
+
+    assert task_id == "api-task-override"
+    assert client.post.await_args.kwargs["json"]["model"] == "seedance2.0fast"
+
+
+@pytest.mark.asyncio
+async def test_API提交_无模型配置时不传空字符串模型():
+    from services.video.seedance import SeedanceGenerator
+    from unittest.mock import Mock
+
+    config = await AiModelConfig.create(
+        task_type=AiTaskTypeEnum.video.value,
+        name="seedance-api",
+        base_url="https://mock.api.com",
+        api_key="sk-test",
+        model=None,
+        is_active=True,
+    )
+    generator = SeedanceGenerator(config)
+
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {"id": "api-task-no-model"}
+    response.raise_for_status.return_value = None
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.post.return_value = response
+
+    with patch("services.video.seedance.httpx.AsyncClient", return_value=client):
+        task_id = await generator.submit(prompt="测试提示词", duration=6.0)
+
+    assert task_id == "api-task-no-model"
+    assert "model" not in client.post.await_args.kwargs["json"]
 
 
 @pytest.mark.asyncio

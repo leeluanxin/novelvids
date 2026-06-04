@@ -106,6 +106,12 @@ export interface Video {
   updated_at: string;
 }
 
+export interface VideoGeneratePayload {
+  scene_id: number;
+  model_type: VideoModelTypeEnum;
+  model_version?: string;
+}
+
 export interface ChapterVideoItem {
   scene_id: number;
   sequence: number;

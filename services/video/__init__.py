@@ -24,7 +24,7 @@ def get_generator(model_type: int, config: AiModelConfig) -> BaseVideoGenerator:
     if cls is None:
         raise ValueError(f"不支持的视频模型类型: {model_type}")
 
-    if (config.invocation_type or "api").lower() == "cli":
+    if (config.invocation_type or "cli").lower() == "cli":
         if model_type != VideoModelTypeEnum.seedance.value:
             raise ValueError("CLI 视频生成当前仅支持 Seedance/Dreamina")
 
