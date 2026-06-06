@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Film, Video, Loader2, RefreshCw, AlertCircle } from "lucide-react"
+import { Film, Video, Loader2, RefreshCw, AlertCircle, CheckSquare, Square } from "lucide-react"
 import { api } from "@/services/api"
 import type { Scene, Video as VideoType } from "@/types"
 import { TaskStatusEnum, VideoModelTypeEnum } from "@/types"
@@ -28,6 +28,14 @@ interface VideoGenerateOption {
   description: string
   modelType: VideoModelTypeEnum
   modelVersion?: string
+  enabled: boolean
+}
+
+interface SceneGenerateResult {
+  sceneId: number
+  sceneSequence: number
+  success: boolean
+  errorMessage?: string
 }
 
 const VIDEO_GENERATE_OPTIONS: VideoGenerateOption[] = [
@@ -37,6 +45,7 @@ const VIDEO_GENERATE_OPTIONS: VideoGenerateOption[] = [
     description: "默认推荐，出图更快",
     modelType: VideoModelTypeEnum.SEEDANCE,
     modelVersion: "seedance2.0fast",
+    enabled: true,
   },
   {
     key: "seedance-vip",
@@ -44,24 +53,28 @@ const VIDEO_GENERATE_OPTIONS: VideoGenerateOption[] = [
     description: "即梦高规格版本",
     modelType: VideoModelTypeEnum.SEEDANCE,
     modelVersion: "seedance2.0vip",
+    enabled: true,
   },
   {
     key: "veo-3",
     label: "Veo 3",
-    description: "高质量生成",
+    description: "暂未配置",
     modelType: VideoModelTypeEnum.VEO_3,
+    enabled: false,
   },
   {
     key: "sora-2",
     label: "Sora 2",
-    description: "OpenAI 视频模型",
+    description: "暂未配置",
     modelType: VideoModelTypeEnum.SORA_2,
+    enabled: false,
   },
   {
     key: "vidu-q2",
     label: "Vidu Q2",
-    description: "轻量快速生成",
+    description: "暂未配置",
     modelType: VideoModelTypeEnum.VIDU_Q2,
+    enabled: false,
   },
 ]
 
@@ -88,9 +101,12 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const [generatingSceneIds, setGeneratingSceneIds] = useState<number[]>([])
   const [loading, setLoading] = useState(true)
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
+  const [generateDialogMode, setGenerateDialogMode] = useState<"single" | "batch">("single")
   const [selectedOptionKey, setSelectedOptionKey] = useState(
     DEFAULT_VIDEO_GENERATE_OPTION_KEY
   )
+  const [batchParallelEnabled, setBatchParallelEnabled] = useState(false)
+  const [batchGenerating, setBatchGenerating] = useState(false)
   const selectedSceneIdRef = useRef<number | null>(null)
 
   const loadScenes = async () => {
@@ -140,6 +156,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
       VIDEO_GENERATE_OPTIONS[0],
     [selectedOptionKey]
   )
+  const batchParallelSupported = selectedGenerateOption.key === "seedance-vip"
 
   const mergeUniqueVideos = (items: VideoType[]) => {
     const seen = new Set<number>()
@@ -152,6 +169,11 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
     })
   }
 
+  const resetGenerateDialogState = () => {
+    setSelectedOptionKey(DEFAULT_VIDEO_GENERATE_OPTION_KEY)
+    setBatchParallelEnabled(false)
+  }
+
   const handleOpenGenerateDialog = () => {
     if (selectedScene) {
       console.info("[StepStudio] open generate dialog", {
@@ -159,19 +181,31 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
         sceneSequence: selectedScene.sequence,
       })
     }
-    setSelectedOptionKey(DEFAULT_VIDEO_GENERATE_OPTION_KEY)
+    setGenerateDialogMode("single")
+    resetGenerateDialogState()
     setGenerateDialogOpen(true)
   }
 
-  const handleGenerate = async () => {
-    if (!selectedScene) return
+  const handleOpenBatchGenerateDialog = () => {
+    console.info("[StepStudio] open batch generate dialog", {
+      sceneCount: scenes.length,
+    })
+    setGenerateDialogMode("batch")
+    resetGenerateDialogState()
+    setGenerateDialogOpen(true)
+  }
 
-    const sceneId = selectedScene.id
-    const sceneSequence = selectedScene.sequence
+  const generateSceneVideo = async (
+    scene: Scene,
+    option: VideoGenerateOption,
+    opts?: { silent?: boolean }
+  ): Promise<SceneGenerateResult> => {
+    const sceneId = scene.id
+    const sceneSequence = scene.sequence
     const requestPayload = {
       scene_id: sceneId,
-      model_type: selectedGenerateOption.modelType,
-      model_version: selectedGenerateOption.modelVersion,
+      model_type: option.modelType,
+      model_version: option.modelVersion,
     }
 
     try {
@@ -179,8 +213,8 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
         sceneId,
         sceneSequence,
         payload: requestPayload,
+        silent: opts?.silent ?? false,
       })
-      setGenerateDialogOpen(false)
       setGeneratingSceneIds((current) =>
         current.includes(sceneId) ? current : [...current, sceneId]
       )
@@ -210,11 +244,26 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
           mergeUniqueVideos(prev.map((v) => (v.id === finished.id ? finished : v)))
         )
       }
-      const sceneLabel = scenes.find((scene) => scene.id === sceneId)?.sequence ?? sceneId
+      const sceneLabel = scenes.find((item) => item.id === sceneId)?.sequence ?? sceneId
       if (finished.status === TaskStatusEnum.COMPLETED) {
-        toast.success(`分镜 #${sceneLabel} 视频生成完成`)
-      } else {
-        toast.error(finished.metadata?.error || `分镜 #${sceneLabel} 视频生成失败`)
+        if (!opts?.silent) {
+          toast.success(`分镜 #${sceneLabel} 视频生成完成`)
+        }
+        return {
+          sceneId,
+          sceneSequence,
+          success: true,
+        }
+      }
+      const errorMessage = finished.metadata?.error || `分镜 #${sceneLabel} 视频生成失败`
+      if (!opts?.silent) {
+        toast.error(errorMessage)
+      }
+      return {
+        sceneId,
+        sceneSequence,
+        success: false,
+        errorMessage,
       }
     } catch (err) {
       console.error("[StepStudio] generate failed", {
@@ -223,13 +272,91 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
         payload: requestPayload,
         error: err,
       })
-      toast.error((err as Error).message || "视频生成失败")
+      const errorMessage = (err as Error).message || "视频生成失败"
+      if (!opts?.silent) {
+        toast.error(errorMessage)
+      }
+      return {
+        sceneId,
+        sceneSequence,
+        success: false,
+        errorMessage,
+      }
     } finally {
       console.info("[StepStudio] generate cleanup", {
         sceneId,
         sceneSequence,
       })
       setGeneratingSceneIds((current) => current.filter((id) => id !== sceneId))
+    }
+  }
+
+  const handleGenerate = async () => {
+    if (!selectedScene) return
+    setGenerateDialogOpen(false)
+    await generateSceneVideo(selectedScene, selectedGenerateOption)
+  }
+
+  const handleBatchGenerate = async () => {
+    if (scenes.length === 0 || batchGenerating) return
+
+    const targetScenes = [...scenes]
+    const option = selectedGenerateOption
+
+    console.info("[StepStudio] batch generate start", {
+      sceneCount: targetScenes.length,
+      parallel: batchParallelEnabled,
+      optionKey: option.key,
+      modelType: option.modelType,
+      modelVersion: option.modelVersion,
+    })
+
+    setGenerateDialogOpen(false)
+    setBatchGenerating(true)
+
+    try {
+      let results: SceneGenerateResult[] = []
+
+      if (batchParallelEnabled) {
+        const settled = await Promise.allSettled(
+          targetScenes.map((scene) => generateSceneVideo(scene, option, { silent: true }))
+        )
+        results = settled.map((item, index) => {
+          if (item.status === "fulfilled") {
+            return item.value
+          }
+          return {
+            sceneId: targetScenes[index].id,
+            sceneSequence: targetScenes[index].sequence,
+            success: false,
+            errorMessage: item.reason instanceof Error ? item.reason.message : "视频生成失败",
+          }
+        })
+      } else {
+        for (const scene of targetScenes) {
+          results.push(await generateSceneVideo(scene, option, { silent: true }))
+        }
+      }
+
+      const successCount = results.filter((item) => item.success).length
+      const failedResults = results.filter((item) => !item.success)
+
+      if (failedResults.length === 0) {
+        toast.success(`批量生成完成：${successCount} 成功`)
+      } else {
+        const failedSequences = failedResults
+          .slice(0, 5)
+          .map((item) => `#${item.sceneSequence}`)
+          .join("、")
+        toast.error(
+          `批量生成完成：${successCount} 成功，${failedResults.length} 失败${failedSequences ? `（失败分镜：${failedSequences}）` : ""}`
+        )
+      }
+    } finally {
+      console.info("[StepStudio] batch generate cleanup", {
+        sceneCount: targetScenes.length,
+      })
+      setBatchGenerating(false)
     }
   }
 
@@ -285,6 +412,9 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
                       <span className="text-sm font-bold text-muted-foreground">
                         #{scene.sequence}
                       </span>
+                      {generatingSceneIds.includes(scene.id) && (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                      )}
                       {scene.duration != null && (
                         <span className="text-xs text-muted-foreground">
                           {scene.duration}秒
@@ -299,6 +429,26 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
               })}
             </div>
           )}
+        </div>
+        <div className="p-4 border-t">
+          <Button
+            className="w-full"
+            variant="secondary"
+            onClick={handleOpenBatchGenerateDialog}
+            disabled={batchGenerating}
+          >
+            {batchGenerating ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                批量生成中...
+              </>
+            ) : (
+              <>
+                <Video className="h-4 w-4 mr-2" />
+                一键生成
+              </>
+            )}
+          </Button>
         </div>
       </div>
 
@@ -438,10 +588,18 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
             </div>
           </>
         )}
-        <Dialog open={generateDialogOpen} onOpenChange={setGenerateDialogOpen}>
+        <Dialog
+          open={generateDialogOpen}
+          onOpenChange={(open) => {
+            if (batchGenerating) {
+              return
+            }
+            setGenerateDialogOpen(open)
+          }}
+        >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>选择视频模型</DialogTitle>
+              <DialogTitle>{generateDialogMode === "batch" ? "一键生成视频" : "选择视频模型"}</DialogTitle>
               <DialogDescription>
                 默认推荐 Seedance 2.0 Fast，也可以切换到其他模型后再生成。
               </DialogDescription>
@@ -450,41 +608,104 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
             <div className="space-y-3">
               {VIDEO_GENERATE_OPTIONS.map((option) => {
                 const isSelected = option.key === selectedOptionKey
+                const isDisabled = !option.enabled
                 return (
                   <button
                     key={option.key}
                     type="button"
+                    disabled={isDisabled}
                     className={`w-full rounded-lg border p-4 text-left transition-colors ${
-                      isSelected
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:bg-muted/50"
+                      isDisabled
+                        ? "border-border bg-muted/20 text-muted-foreground cursor-not-allowed opacity-60"
+                        : isSelected
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:bg-muted/50"
                     }`}
-                    onClick={() => setSelectedOptionKey(option.key)}
+                    onClick={() => {
+                      if (isDisabled) {
+                        return
+                      }
+                      setSelectedOptionKey(option.key)
+                      if (option.key !== "seedance-vip") {
+                        setBatchParallelEnabled(false)
+                      }
+                    }}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{option.label}</div>
-                        <div className="text-sm text-muted-foreground mt-1">
-                          {option.description}
+                      <div className="flex items-start gap-3 min-w-0">
+                        {isSelected && !isDisabled ? (
+                          <CheckSquare className="h-5 w-5 mt-0.5 text-primary shrink-0" />
+                        ) : (
+                          <Square className="h-5 w-5 mt-0.5 text-muted-foreground shrink-0" />
+                        )}
+                        <div>
+                          <div className="font-medium">{option.label}</div>
+                          <div className="text-sm text-muted-foreground mt-1">
+                            {option.description}
+                          </div>
                         </div>
                       </div>
-                      {isSelected && <Badge>已选择</Badge>}
+                      {isDisabled ? <Badge variant="outline">暂不可用</Badge> : isSelected ? <Badge>已选择</Badge> : null}
                     </div>
                   </button>
                 )
               })}
             </div>
 
+            {generateDialogMode === "batch" && (
+              <div className="rounded-lg border p-4 space-y-2">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-medium">是否并行</div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      {batchParallelSupported
+                        ? "当前模型支持并行生成，可按需开启。"
+                        : "当前模型暂不支持并行生成。"}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!batchParallelSupported}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      !batchParallelSupported
+                        ? "border-border bg-muted/20 text-muted-foreground cursor-not-allowed opacity-60"
+                        : batchParallelEnabled
+                          ? "border-primary bg-primary/5 text-foreground"
+                          : "border-border hover:bg-muted/50 text-foreground"
+                    }`}
+                    onClick={() => setBatchParallelEnabled((value) => !value)}
+                  >
+                    {batchParallelEnabled ? (
+                      <CheckSquare className="h-4 w-4 text-primary shrink-0" />
+                    ) : (
+                      <Square className="h-4 w-4 text-muted-foreground shrink-0" />
+                    )}
+                    <span>{batchParallelEnabled ? "并行已开启" : "并行已关闭"}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             <DialogFooter>
               <Button
                 variant="outline"
                 onClick={() => setGenerateDialogOpen(false)}
-                disabled={isSelectedSceneGenerating}
+                disabled={generateDialogMode === "batch" ? batchGenerating : isSelectedSceneGenerating}
               >
                 取消
               </Button>
-              <Button onClick={handleGenerate} disabled={isSelectedSceneGenerating}>
-                开始生成
+              <Button
+                onClick={generateDialogMode === "batch" ? handleBatchGenerate : handleGenerate}
+                disabled={generateDialogMode === "batch" ? batchGenerating : isSelectedSceneGenerating}
+              >
+                {generateDialogMode === "batch" && batchGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    生成中...
+                  </>
+                ) : (
+                  "开始生成"
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>

@@ -10,6 +10,9 @@ from services.storyboard.generator import generate_storyboard
 from schemas.scene import SceneEntity
 
 
+NARRATION_VOICE_PREFIX = "旁白声音说明：旁白音色是一个甜美年轻女生，音调偏高，略微有些夹子音。参考@音频1，固定写死即可"
+
+
 class StoryboardTaskHandler(BaseTaskHandler):
     """Sora 2 超详细分镜生成任务处理器"""
 
@@ -112,6 +115,7 @@ class StoryboardTaskHandler(BaseTaskHandler):
         for shot in storyboard.shots:
             # 构建 prompt JSON 对象
             prompt_params = {
+                "narrator": shot.narrator,
                 "visual_prose": shot.visual_prose,
                 "actions": shot.actions,
                 "format_and_look": shot.format_and_look,
@@ -127,6 +131,7 @@ class StoryboardTaskHandler(BaseTaskHandler):
             # 构建 metadata，包含 API 元数据
             scene_metadata = {
                 "shot_title": shot.description,
+                "narrator": shot.narrator,
                 "duration": shot.duration,
                 "sequence_id": shot.sequence,
                 "storyboard_style": storyboard_style,
@@ -149,6 +154,8 @@ class StoryboardTaskHandler(BaseTaskHandler):
                 scene_metadata["refusal"] = api_metadata["refusal"]
             # 评价成prompt字符串
             prompt = (
+                f"{NARRATION_VOICE_PREFIX}\n"
+                f"{shot.narrator}\n\n"
                 f"Visual Prose: {shot.visual_prose}\n"
                 f"Actions: {shot.actions}\n"
                 f"Format and Look: {shot.format_and_look}\n"

@@ -124,7 +124,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
   const [promptPreview, setPromptPreview] = useState<ScenePromptPreview | null>(null)
   const [promptForm, setPromptForm] = useState({
     system_prompt: "",
-    user_prompt: "",
   })
 
   const [editingScene, setEditingScene] = useState<Scene | null>(null)
@@ -180,7 +179,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
       setPromptPreview(res.data)
       setPromptForm({
         system_prompt: res.data.system_prompt || "",
-        user_prompt: res.data.user_prompt || "",
       })
       setPromptDialogOpen(true)
     } catch (err) {
@@ -196,7 +194,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
       const res = await api.generateScenes({
         chapter_id: chapterId,
         system_prompt_override: promptForm.system_prompt.trim(),
-        user_prompt_override: promptForm.user_prompt.trim(),
       })
       const task = await pollTask(res.data.id)
       if (task.status === TaskStatusEnum.COMPLETED) {
@@ -401,15 +398,6 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium">User Prompt</label>
-              <Textarea
-                value={promptForm.user_prompt}
-                onChange={(e) => setPromptForm((prev) => ({ ...prev, user_prompt: e.target.value }))}
-                rows={10}
-                className="font-mono text-xs leading-6"
-              />
-            </div>
           </div>
 
           <DialogFooter>
@@ -418,7 +406,7 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
             </Button>
             <Button
               onClick={handleGenerate}
-              disabled={generating || !promptForm.system_prompt.trim() || !promptForm.user_prompt.trim()}
+              disabled={generating || !promptForm.system_prompt.trim()}
               className="shadow-lg shadow-primary/20"
             >
               {generating && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}

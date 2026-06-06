@@ -8,10 +8,7 @@ from models.chapter import Chapter
 from models.scene import Scene
 from schemas.scene import SceneCreate, SceneEntity, SceneUpdate
 from services.ai_task_executor import ai_task_executor
-from services.storyboard.generator import (
-    build_storyboard_system_prompt,
-    build_storyboard_user_prompt,
-)
+from services.storyboard.generator import build_storyboard_system_prompt
 from utils.crud import CRUDBase
 from utils.enums import AiTaskTypeEnum, TaskStatusEnum
 
@@ -74,17 +71,15 @@ class SceneController(CRUDBase[Scene, SceneCreate, SceneUpdate]):
     ) -> dict:
         chapter, storyboard_style, entities = await self._build_storyboard_prompt_context(chapter_id)
         system_prompt = build_storyboard_system_prompt(
+            long_text=chapter.content,
             entities=entities,
             style_prompt=storyboard_style.get("storyboard_style_prompt"),
             system_prompt_override=system_prompt_override,
-        )
-        user_prompt = build_storyboard_user_prompt(
-            long_text=chapter.content,
             user_prompt_override=user_prompt_override,
         )
         return {
             "system_prompt": system_prompt,
-            "user_prompt": user_prompt,
+            "user_prompt": "",
             "storyboard_style": {
                 "id": storyboard_style.get("storyboard_style_id"),
                 "name": storyboard_style.get("storyboard_style_name"),
@@ -120,14 +115,13 @@ class SceneController(CRUDBase[Scene, SceneCreate, SceneUpdate]):
                 )
 
         actual_system_prompt = build_storyboard_system_prompt(
+            long_text=chapter.content,
             entities=entities,
             style_prompt=storyboard_style.get("storyboard_style_prompt"),
             system_prompt_override=system_prompt_override,
-        )
-        actual_user_prompt = build_storyboard_user_prompt(
-            long_text=chapter.content,
             user_prompt_override=user_prompt_override,
         )
+        actual_user_prompt = ""
 
         request_params = {
             "chapter_id": chapter.id,

@@ -31,6 +31,7 @@ class SoraScenePromptConfig(BaseModel):
     """生成视频分镜的提示词配置 - Sora"""
     sequence: int = Field(..., description="分镜序列号")
     description: str = Field(..., description="分镜标题，简短有力，如 'The Revelation'")
+    narrator: str = Field(..., description="该分镜的完整旁白朗读内容")
     duration: float = Field(..., description="时长，单位秒，支持整数或小数")
 
     @field_validator("duration", mode="before")

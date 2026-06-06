@@ -142,14 +142,12 @@ export interface AiTask {
 
 export interface ScenePromptPreview {
   system_prompt: string;
-  user_prompt: string;
   storyboard_style?: StyleBinding;
 }
 
 export interface SceneGeneratePayload {
   chapter_id: number;
   system_prompt_override?: string;
-  user_prompt_override?: string;
 }
 
 export interface AiModelConfig {
