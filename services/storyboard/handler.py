@@ -10,7 +10,7 @@ from services.storyboard.generator import generate_storyboard
 from schemas.scene import SceneEntity
 
 
-NARRATION_VOICE_PREFIX = "旁白声音说明：旁白音色是一个甜美年轻女生，音调偏高，略微有些夹子音。参考@音频1，固定写死即可"
+NARRATION_VOICE_PREFIX = "旁白声音说明：旁白音色是一个甜美年轻女生，音调偏高，略微有些夹子音。参考@音频1"
 
 
 class StoryboardTaskHandler(BaseTaskHandler):

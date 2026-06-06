@@ -480,6 +480,8 @@ class SeedanceGenerator(BaseVideoGenerator):
             "Seedance _process_prompt: subjects=%d, ref_images=%d, ref_videos=%d, ref_audios=%d, prompt[:80]=%r",
             len(subjects or []), len(ref_images), len(ref_videos), len(ref_audios), processed_prompt[:80],
         )
+        if ref_videos:
+            logger.info("Seedance video refs: %s", ref_videos)
 
         model_name = selected_model_version
         supports_images = bool(model_name) and ("i2v" in model_name or "t2v" in model_name)

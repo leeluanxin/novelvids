@@ -36,6 +36,7 @@ interface SceneGenerateResult {
   sceneSequence: number
   success: boolean
   errorMessage?: string
+  completedVideoUrl?: string
 }
 
 const VIDEO_GENERATE_OPTIONS: VideoGenerateOption[] = [
@@ -198,7 +199,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const generateSceneVideo = async (
     scene: Scene,
     option: VideoGenerateOption,
-    opts?: { silent?: boolean }
+    opts?: { silent?: boolean; previousVideoUrl?: string }
   ): Promise<SceneGenerateResult> => {
     const sceneId = scene.id
     const sceneSequence = scene.sequence
@@ -206,6 +207,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
       scene_id: sceneId,
       model_type: option.modelType,
       model_version: option.modelVersion,
+      previous_video_url: opts?.previousVideoUrl,
     }
 
     try {
@@ -253,6 +255,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
           sceneId,
           sceneSequence,
           success: true,
+          completedVideoUrl: finished.url,
         }
       }
       const errorMessage = finished.metadata?.error || `分镜 #${sceneLabel} 视频生成失败`
@@ -333,8 +336,14 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
           }
         })
       } else {
+        let previousVideoUrl: string | undefined
         for (const scene of targetScenes) {
-          results.push(await generateSceneVideo(scene, option, { silent: true }))
+          const result = await generateSceneVideo(scene, option, {
+            silent: true,
+            previousVideoUrl,
+          })
+          results.push(result)
+          previousVideoUrl = result.success ? result.completedVideoUrl : undefined
         }
       }
 

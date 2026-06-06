@@ -24,6 +24,12 @@ from utils.page import QueryBuilder, QueryParams
 
 logger = logging.getLogger(__name__)
 
+CONTINUITY_PROMPT_PREFIX = (
+    "【续接参考】请参考@视频1，并以当前分镜内容为主，自行判断参考强度；"
+    "优先延续人物外观、动作趋势与整体氛围。若当前分镜仍是同一场景，请保持场景陈设、"
+    "主体位置关系、光线和镜头朝向的一致性；若已切换场景，则仅将@视频1作为过渡参考，无需复现。"
+)
+
 
 async def _download_video(remote_url: str, video_id: int) -> str:
     """将远程视频下载到本地 MEDIA_PATH/videos/ 目录，返回可访问的 /media/ 路径。"""
@@ -103,11 +109,26 @@ class VideoController(CRUDBase[Video, dict, dict]):
         # 解析 @资产昵称
         prompt = scene.prompt or ""
         subjects = await resolve_assets(prompt, novel_id)
+
+        if req.previous_video_url:
+            prompt = f"{CONTINUITY_PROMPT_PREFIX}\n\n{prompt}" if prompt else CONTINUITY_PROMPT_PREFIX
+            subjects = [
+                {
+                    "name": "视频1",
+                    "description": "上一段视频续接参考",
+                    "images": [],
+                    "videos": [req.previous_video_url],
+                    "audios": [],
+                },
+                *subjects,
+            ]
+
         logger.info(
-            "Video resolve_assets: scene_id=%s, novel_id=%s, prompt_len=%d, subjects=%s",
+            "Video resolve_assets: scene_id=%s, novel_id=%s, prompt_len=%d, previous_video=%s, subjects=%s",
             scene.id,
             novel_id,
             len(prompt),
+            bool(req.previous_video_url),
             [
                 (
                     s["name"],
@@ -125,11 +146,12 @@ class VideoController(CRUDBase[Video, dict, dict]):
         invocation_type = (config.invocation_type or "cli").lower()
         if invocation_type == "cli":
             logger.info(
-                "Dreamina CLI submit start: scene_sequence=%s, scene_id=%s, model_type=%s, model_version=%s",
+                "Dreamina CLI submit start: scene_sequence=%s, scene_id=%s, model_type=%s, model_version=%s, previous_video=%s",
                 scene.sequence,
                 scene.id,
                 req.model_type,
                 req.model_version,
+                bool(req.previous_video_url),
             )
         try:
             external_task_id = await generator.submit(

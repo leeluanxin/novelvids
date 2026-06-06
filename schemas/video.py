@@ -11,6 +11,7 @@ class VideoGenerateRequest(BaseModel):
     scene_id: int = Field(..., description="分镜ID")
     model_type: VideoModelTypeEnum = Field(..., description=VideoModelTypeEnum.__doc__)
     model_version: Optional[str] = Field(None, description="提供商具体模型版本")
+    previous_video_url: Optional[str] = Field(None, description="上一段视频URL，用于串行续接参考")
 
 
 # --- 输出 Schema ---

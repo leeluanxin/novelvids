@@ -110,6 +110,7 @@ export interface VideoGeneratePayload {
   scene_id: number;
   model_type: VideoModelTypeEnum;
   model_version?: string;
+  previous_video_url?: string;
 }
 
 export interface ChapterVideoItem {
