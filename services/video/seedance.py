@@ -126,35 +126,59 @@ def _clip_for_log(output: object, limit: int = 1000) -> str:
     return text
 
 
-def _extract_video_urls(output: object) -> list[str]:
-    if isinstance(output, str) and output.startswith(("http://", "https://")):
-        return [output]
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_VIDEO_FILE_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi", ".flv"}
+
+
+def _looks_like_video_url(value: str) -> bool:
+    parsed_path = urlparse(value).path.lower()
+    _, extension = os.path.splitext(parsed_path)
+    return extension in _VIDEO_FILE_EXTENSIONS
+
+
+def _extract_url_strings(value: str) -> list[str]:
+    return _URL_RE.findall(value)
+
+
+def _extract_video_urls(output: object, *, video_context: bool = False) -> list[str]:
+    if isinstance(output, str):
+        candidates = [output] if output.startswith(("http://", "https://")) else _extract_url_strings(output)
+        if video_context:
+            return _dedupe(candidates)
+        return _dedupe([value for value in candidates if _looks_like_video_url(value)])
 
     if isinstance(output, list):
         urls: list[str] = []
         for item in output:
-            urls.extend(_extract_video_urls(item))
+            urls.extend(_extract_video_urls(item, video_context=video_context))
         return _dedupe(urls)
 
     if isinstance(output, dict):
         urls: list[str] = []
+        type_markers = [
+            output.get("type"),
+            output.get("media_type"),
+            output.get("asset_type"),
+            output.get("kind"),
+            output.get("mime_type"),
+            output.get("content_type"),
+        ]
+        current_video_context = video_context or any(
+            isinstance(marker, str) and ("video" in marker.lower() or marker.lower() == "mp4")
+            for marker in type_markers
+        )
 
-        for key in ("video_url", "url"):
-            value = output.get(key)
-            if isinstance(value, str) and value.startswith(("http://", "https://")):
-                urls.append(value)
-
-        for key in ("videos", "video_urls", "result_urls", "assets", "items", "content"):
-            value = output.get(key)
-            if isinstance(value, list):
-                urls.extend(_extract_video_urls(value))
-            elif isinstance(value, dict):
-                urls.extend(_extract_video_urls(value))
-
-        for key in ("result", "result_json", "data", "output", "response"):
-            value = output.get(key)
-            if value is not None:
-                urls.extend(_extract_video_urls(value))
+        for key, value in output.items():
+            key_lower = key.lower()
+            next_video_context = current_video_context or "video" in key_lower
+            if isinstance(value, str):
+                candidates = [value] if value.startswith(("http://", "https://")) else _extract_url_strings(value)
+                if next_video_context:
+                    urls.extend(candidates)
+                elif any(token in key_lower for token in ("url", "uri", "src", "path")):
+                    urls.extend([item for item in candidates if _looks_like_video_url(item)])
+            elif isinstance(value, (list, dict)):
+                urls.extend(_extract_video_urls(value, video_context=next_video_context))
 
         return _dedupe(urls)
 
@@ -184,7 +208,19 @@ def _extract_task_id(output: object) -> str | None:
 
 def _extract_raw_status(output: object) -> str | None:
     if isinstance(output, dict):
-        for key in ("status", "state", "task_status"):
+        for key in (
+            "status",
+            "state",
+            "task_status",
+            "taskStatus",
+            "process_status",
+            "processStatus",
+            "job_status",
+            "jobStatus",
+            "result_status",
+            "resultStatus",
+            "phase",
+        ):
             value = output.get(key)
             if isinstance(value, str) and value.strip():
                 return value
@@ -206,12 +242,12 @@ def _extract_raw_status(output: object) -> str | None:
 def _map_cli_status(raw_status: str | None) -> TaskStatusEnum:
     normalized = (raw_status or "").strip().lower()
 
-    if normalized in {"succeeded", "completed", "success", "done", "finished"}:
-        return TaskStatusEnum.completed
-    if normalized in {"failed", "error", "cancelled", "canceled", "timeout"}:
+    if any(token in normalized for token in ("fail", "error", "cancel", "timeout", "abort", "reject")):
         return TaskStatusEnum.failed
-    if normalized in {"queued", "queueing", "waiting", "pending"}:
+    if any(token in normalized for token in ("queue", "wait", "pend")):
         return TaskStatusEnum.queued
+    if any(token in normalized for token in ("succeed", "success", "complete", "done", "finish")):
+        return TaskStatusEnum.completed
     return TaskStatusEnum.running
 
 
@@ -574,11 +610,28 @@ class SeedanceGenerator(BaseVideoGenerator):
                     _clip_for_log(output),
                 )
 
-            status = _map_cli_status(raw_status)
+            mapped_status = _map_cli_status(raw_status)
+            status = mapped_status
             if video_urls and status != TaskStatusEnum.failed:
                 status = TaskStatusEnum.completed
 
+            logger.info(
+                "Dreamina CLI query normalized: task_id=%s, raw_status=%s, mapped_status=%s, final_status=%s, primary_url=%s, video_urls=%d",
+                external_task_id,
+                raw_status,
+                mapped_status.value,
+                status.value,
+                video_urls[0] if video_urls else None,
+                len(video_urls),
+            )
+
             if status == TaskStatusEnum.completed and not video_urls:
+                logger.warning(
+                    "Dreamina CLI query completed without video url: task_id=%s, raw_status=%s, output=%s",
+                    external_task_id,
+                    raw_status,
+                    _clip_for_log(output),
+                )
                 return self._build_result(
                     TaskStatusEnum.failed,
                     error="CLI video task completed but no video URL was returned",
@@ -591,6 +644,7 @@ class SeedanceGenerator(BaseVideoGenerator):
                 progress=100 if status == TaskStatusEnum.completed else None,
                 url=video_urls[0] if video_urls else None,
                 raw_status=raw_status,
+                mapped_status=mapped_status.value,
                 output=output,
             )
 

@@ -25,9 +25,12 @@ from utils.page import QueryBuilder, QueryParams
 logger = logging.getLogger(__name__)
 
 CONTINUITY_PROMPT_PREFIX = (
-    "【续接参考】请参考@视频1，并以当前分镜内容为主，自行判断参考强度；"
-    "优先延续人物外观、动作趋势与整体氛围。若当前分镜仍是同一场景，请保持场景陈设、"
-    "主体位置关系、光线和镜头朝向的一致性；若已切换场景，则仅将@视频1作为过渡参考，无需复现。"
+    "【续接参考】请弱参考@视频1，并以当前分镜内容为主；"
+    "仅参考场景连续性与必要的镜头衔接，不要过度继承@视频1的其他特征。"
+    "若当前分镜仍是同一场景，请仅保持场景陈设、空间关系、光线方向和镜头朝向的大体一致；"
+    "若已切换场景，则仅将@视频1作为过渡参考，无需复现。"
+    "不要参考或继承@视频1的画面清晰度、锐度、噪点、压缩感、音质、背景音、旁白声音或其他质量特征；"
+    "画面细节、声音效果和旁白质量应以当前生成结果的最佳质量为准。"
 )
 
 
@@ -221,8 +224,14 @@ class VideoController(CRUDBase[Video, dict, dict]):
         generator = get_generator(video.model_type, config)
         result = await generator.query(video.external_task_id)
         logger.info(
-            "Video query result: video_id=%s, status=%s, url=%s, metadata=%s",
-            video_id, result.get("status"), result.get("url"), result.get("metadata"),
+            "Video query result: video_id=%s, task_id=%s, raw_status=%s, mapped_status=%s, final_status=%s, url=%s, metadata=%s",
+            video_id,
+            video.external_task_id,
+            result.get("metadata", {}).get("raw_status"),
+            result.get("metadata", {}).get("mapped_status"),
+            result.get("status"),
+            result.get("url"),
+            result.get("metadata"),
         )
 
         # 更新 Video 记录
@@ -234,16 +243,39 @@ class VideoController(CRUDBase[Video, dict, dict]):
         # 视频完成时，下载到本地替换临时 URL
         remote_url = result.get("url")
         if remote_url:
+            logger.info(
+                "Video download start: video_id=%s, task_id=%s, remote_url=%s",
+                video_id,
+                video.external_task_id,
+                remote_url,
+            )
             try:
                 media_url = await _download_video(remote_url, video.id)
                 video.url = media_url
                 update_fields.append("url")
+                logger.info(
+                    "Video download success: video_id=%s, task_id=%s, media_url=%s",
+                    video_id,
+                    video.external_task_id,
+                    media_url,
+                )
             except Exception as e:
-                logger.error("Video download failed: video_id=%s, error=%s", video_id, e)
+                logger.error(
+                    "Video download failed: video_id=%s, task_id=%s, remote_url=%s, error=%s",
+                    video_id,
+                    video.external_task_id,
+                    remote_url,
+                    e,
+                )
                 video.metadata = {**(video.metadata or {}), "error": f"视频下载失败: {e}"}
                 update_fields.append("metadata")
         elif new_status == TaskStatusEnum.completed.value:
-            logger.warning("Video completed but no URL: video_id=%s, result=%s", video_id, result)
+            logger.warning(
+                "Video completed but no URL: video_id=%s, task_id=%s, result=%s",
+                video_id,
+                video.external_task_id,
+                result,
+            )
 
         if result.get("metadata"):
             video.metadata = {**(video.metadata or {}), **result["metadata"]}

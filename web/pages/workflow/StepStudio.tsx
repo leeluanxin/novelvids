@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Film, Video, Loader2, RefreshCw, AlertCircle, CheckSquare, Square } from "lucide-react"
+import { Film, Video, Loader2, RefreshCw, AlertCircle, CheckSquare, Square, Trash2 } from "lucide-react"
 import { api } from "@/services/api"
 import type { Scene, Video as VideoType } from "@/types"
 import { TaskStatusEnum, VideoModelTypeEnum } from "@/types"
@@ -88,7 +88,8 @@ async function pollVideo(videoId: number): Promise<VideoType> {
     const v = res.data
     if (
       v.status === TaskStatusEnum.COMPLETED ||
-      v.status === TaskStatusEnum.FAILED
+      v.status === TaskStatusEnum.FAILED ||
+      v.status === TaskStatusEnum.CANCELLED
     ) {
       return v
     }
@@ -107,6 +108,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
     DEFAULT_VIDEO_GENERATE_OPTION_KEY
   )
   const [batchParallelEnabled, setBatchParallelEnabled] = useState(false)
+  const [batchUsePreviousVideo, setBatchUsePreviousVideo] = useState(false)
   const [batchGenerating, setBatchGenerating] = useState(false)
   const selectedSceneIdRef = useRef<number | null>(null)
 
@@ -173,6 +175,7 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const resetGenerateDialogState = () => {
     setSelectedOptionKey(DEFAULT_VIDEO_GENERATE_OPTION_KEY)
     setBatchParallelEnabled(false)
+    setBatchUsePreviousVideo(false)
   }
 
   const handleOpenGenerateDialog = () => {
@@ -303,26 +306,49 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
   const handleBatchGenerate = async () => {
     if (scenes.length === 0 || batchGenerating) return
 
-    const targetScenes = [...scenes]
     const option = selectedGenerateOption
-
-    console.info("[StepStudio] batch generate start", {
-      sceneCount: targetScenes.length,
-      parallel: batchParallelEnabled,
-      optionKey: option.key,
-      modelType: option.modelType,
-      modelVersion: option.modelVersion,
-    })
 
     setGenerateDialogOpen(false)
     setBatchGenerating(true)
 
+    let targetScenes: Scene[] = []
+
     try {
+      const chapterVideosRes = await api.getChapterVideos(chapterId)
+      const chapterVideoMap = new Map(
+        chapterVideosRes.data.map((item) => [item.scene_id, item.video])
+      )
+      const firstPendingIndex = scenes.findIndex(
+        (scene) => !chapterVideoMap.get(scene.id)?.url
+      )
+
+      if (firstPendingIndex === -1) {
+        toast.success("当前分镜都已有视频，无需重新生成")
+        return
+      }
+
+      targetScenes = scenes.slice(firstPendingIndex)
+
+      console.info("[StepStudio] batch generate start", {
+        sceneCount: targetScenes.length,
+        startSceneSequence: targetScenes[0]?.sequence,
+        parallel: batchParallelEnabled,
+        usePreviousVideo: batchUsePreviousVideo,
+        optionKey: option.key,
+        modelType: option.modelType,
+        modelVersion: option.modelVersion,
+      })
+
       let results: SceneGenerateResult[] = []
 
       if (batchParallelEnabled) {
         const settled = await Promise.allSettled(
-          targetScenes.map((scene) => generateSceneVideo(scene, option, { silent: true }))
+          targetScenes.map((scene) =>
+            generateSceneVideo(scene, option, {
+              silent: true,
+              previousVideoUrl: batchUsePreviousVideo ? chapterVideoMap.get(scene.id)?.url : undefined,
+            })
+          )
         )
         results = settled.map((item, index) => {
           if (item.status === "fulfilled") {
@@ -337,13 +363,24 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
         })
       } else {
         let previousVideoUrl: string | undefined
+        if (batchUsePreviousVideo) {
+          for (let index = firstPendingIndex - 1; index >= 0; index -= 1) {
+            const previousScene = scenes[index]
+            const previousVideo = chapterVideoMap.get(previousScene.id)
+            if (previousVideo?.url) {
+              previousVideoUrl = previousVideo.url
+              break
+            }
+          }
+        }
+
         for (const scene of targetScenes) {
           const result = await generateSceneVideo(scene, option, {
             silent: true,
-            previousVideoUrl,
+            previousVideoUrl: batchUsePreviousVideo ? previousVideoUrl : undefined,
           })
           results.push(result)
-          previousVideoUrl = result.success ? result.completedVideoUrl : undefined
+          previousVideoUrl = batchUsePreviousVideo && result.success ? result.completedVideoUrl : undefined
         }
       }
 
@@ -377,6 +414,16 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
       )
     } catch (err) {
       toast.error((err as Error).message || "刷新视频状态失败")
+    }
+  }
+
+  const handleDeleteVideo = async (video: VideoType) => {
+    try {
+      await api.deleteVideo(video.id)
+      setVideos((prev) => prev.filter((item) => item.id !== video.id))
+      toast.success(`视频 #${video.id} 已删除`)
+    } catch (err) {
+      toast.error((err as Error).message || "删除视频失败")
     }
   }
 
@@ -480,10 +527,18 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
                     controls
                     className="w-full h-full object-contain"
                   />
-                  <div className="absolute top-3 right-3">
+                  <div className="absolute top-3 right-3 flex items-center gap-2">
                     <Badge variant="secondary">
                       {modelLabel(latestVideo.model_type)}
                     </Badge>
+                    <Button
+                      size="icon"
+                      variant="secondary"
+                      className="h-8 w-8"
+                      onClick={() => handleDeleteVideo(latestVideo)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               ) : latestVideo && isProcessing(latestVideo) ? (
@@ -567,14 +622,24 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
                           <span className="text-xs font-mono text-muted-foreground">
                             #{video.id}
                           </span>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-6 w-6"
-                            onClick={() => handleRefresh(video.id)}
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6"
+                              onClick={() => handleRefresh(video.id)}
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6 text-red-500 hover:text-red-500"
+                              onClick={() => handleDeleteVideo(video)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge variant="secondary" className="text-xs">
@@ -662,7 +727,32 @@ export const StepStudio = ({ chapterId }: StepStudioProps) => {
             </div>
 
             {generateDialogMode === "batch" && (
-              <div className="rounded-lg border p-4 space-y-2">
+              <div className="rounded-lg border p-4 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-medium">是否参考上一段</div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      勾选后才会把上一段视频作为续接参考，默认关闭。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      batchUsePreviousVideo
+                        ? "border-primary bg-primary/5 text-foreground"
+                        : "border-border hover:bg-muted/50 text-foreground"
+                    }`}
+                    onClick={() => setBatchUsePreviousVideo((value) => !value)}
+                  >
+                    {batchUsePreviousVideo ? (
+                      <CheckSquare className="h-4 w-4 text-primary shrink-0" />
+                    ) : (
+                      <Square className="h-4 w-4 text-muted-foreground shrink-0" />
+                    )}
+                    <span>{batchUsePreviousVideo ? "已参考上一段" : "不参考上一段"}</span>
+                  </button>
+                </div>
+
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <div className="font-medium">是否并行</div>

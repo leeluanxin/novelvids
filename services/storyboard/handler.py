@@ -116,6 +116,7 @@ class StoryboardTaskHandler(BaseTaskHandler):
             # 构建 prompt JSON 对象
             prompt_params = {
                 "narrator": shot.narrator,
+                "environment": shot.environment,
                 "visual_prose": shot.visual_prose,
                 "actions": shot.actions,
                 "format_and_look": shot.format_and_look,
@@ -132,6 +133,7 @@ class StoryboardTaskHandler(BaseTaskHandler):
             scene_metadata = {
                 "shot_title": shot.description,
                 "narrator": shot.narrator,
+                "environment": shot.environment,
                 "duration": shot.duration,
                 "sequence_id": shot.sequence,
                 "storyboard_style": storyboard_style,
@@ -156,6 +158,7 @@ class StoryboardTaskHandler(BaseTaskHandler):
             prompt = (
                 f"{NARRATION_VOICE_PREFIX}\n"
                 f"{shot.narrator}\n\n"
+                f"Environment: {shot.environment}\n"
                 f"Visual Prose: {shot.visual_prose}\n"
                 f"Actions: {shot.actions}\n"
                 f"Format and Look: {shot.format_and_look}\n"

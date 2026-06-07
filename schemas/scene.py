@@ -1,6 +1,6 @@
 # 生成视频分镜
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from typing import Any, Optional
 from schemas._base import BaseResponse
 from utils.enums import AssetTypeEnum, TaskStatusEnum
@@ -33,6 +33,11 @@ class SoraScenePromptConfig(BaseModel):
     description: str = Field(..., description="分镜标题，简短有力，如 'The Revelation'")
     narrator: str = Field(..., description="该分镜的完整旁白朗读内容")
     duration: float = Field(..., description="时长，单位秒，支持整数或小数")
+    environment: str = Field(
+        ...,
+        validation_alias=AliasChoices("environment", "enviroment"),
+        description="当前镜头的环境描写，包括地点、空间结构、周围陈设、光线、天气、时间感和环境氛围",
+    )
 
     @field_validator("duration", mode="before")
     @classmethod
