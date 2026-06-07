@@ -3,7 +3,8 @@ from uuid import UUID
 from fastapi import HTTPException
 
 from models.ai_task import AiTask
-from utils.enums import TaskStatusEnum
+from services.ai_task_executor import ai_task_executor
+from utils.enums import AiTaskTypeEnum, TaskStatusEnum
 
 
 class AiTaskController:
@@ -13,7 +14,17 @@ class AiTaskController:
         task = await AiTask.get_or_none(id=task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="AiTask not found")
+        await ai_task_executor.cleanup_stale_tasks(AiTaskTypeEnum(task.task_type))
+        await task.refresh_from_db()
         return task
+
+    async def get_active_storyboard_task_by_chapter(self, chapter_id: int) -> AiTask | None:
+        await ai_task_executor.cleanup_stale_tasks(AiTaskTypeEnum.storyboard)
+        return await AiTask.filter(
+            task_type=AiTaskTypeEnum.storyboard.value,
+            status__in=[TaskStatusEnum.pending.value, TaskStatusEnum.running.value],
+            request_params__chapter_id=chapter_id,
+        ).order_by("-created_at").first()
 
     async def cancel(self, task_id: UUID) -> AiTask:
         task = await self.get(task_id)

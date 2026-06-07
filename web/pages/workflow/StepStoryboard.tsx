@@ -38,6 +38,17 @@ async function pollTask(taskId: string): Promise<AiTask> {
   }
 }
 
+async function watchStoryboardTask(taskId: string, onCompleted?: () => Promise<void> | void): Promise<AiTask> {
+  const task = await pollTask(taskId)
+  if (task.status === TaskStatusEnum.COMPLETED) {
+    toast.success("分镜生成完成")
+  } else {
+    toast.error(task.error_message || "分镜生成失败")
+  }
+  await onCompleted?.()
+  return task
+}
+
 function EntityText({
   text,
   assetMap,
@@ -168,8 +179,37 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
   }
 
   useEffect(() => {
-    void loadScenes()
-    void loadAssets()
+    let cancelled = false
+
+    const initialize = async () => {
+      await Promise.all([loadScenes(), loadAssets()])
+
+      try {
+        const res = await api.getActiveStoryboardTask(chapterId)
+        const activeTask = res.data
+        if (!activeTask || cancelled) return
+
+        setGenerating(true)
+        await watchStoryboardTask(activeTask.id, async () => {
+          if (cancelled) return
+          await loadScenes()
+        })
+      } catch (err) {
+        if (!cancelled) {
+          toast.error((err as Error).message || "加载进行中的分镜任务失败")
+        }
+      } finally {
+        if (!cancelled) {
+          setGenerating(false)
+        }
+      }
+    }
+
+    void initialize()
+
+    return () => {
+      cancelled = true
+    }
   }, [chapterId, novelId])
 
   const openPromptDialog = async () => {
@@ -195,14 +235,10 @@ export const StepStoryboard = ({ chapterId, novelId }: StepStoryboardProps) => {
         chapter_id: chapterId,
         system_prompt_override: promptForm.system_prompt.trim(),
       })
-      const task = await pollTask(res.data.id)
-      if (task.status === TaskStatusEnum.COMPLETED) {
-        toast.success("分镜生成完成")
-      } else {
-        toast.error(task.error_message || "分镜生成失败")
-      }
       setPromptDialogOpen(false)
-      await loadScenes()
+      await watchStoryboardTask(res.data.id, async () => {
+        await loadScenes()
+      })
     } catch (err) {
       toast.error((err as Error).message || "分镜生成失败")
     } finally {

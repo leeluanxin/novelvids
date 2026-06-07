@@ -202,6 +202,9 @@ class ApiService {
   }
 
   // --- Tasks ---
+  getActiveStoryboardTask(chapterId: number): Promise<SingleResponse<AiTask | null>> {
+    return request(`/task/active/storyboard/${chapterId}`);
+  }
   getTask(id: string): Promise<SingleResponse<AiTask>> {
     return request(`/task/${id}`);
   }

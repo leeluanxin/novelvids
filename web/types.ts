@@ -137,8 +137,13 @@ export interface AiTask {
   id: string;
   task_type: number;
   status: TaskStatusEnum;
+  request_params?: Record<string, any>;
+  response_data?: Record<string, any>;
   error_message?: string;
+  started_at?: string;
+  finished_at?: string;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface ScenePromptPreview {

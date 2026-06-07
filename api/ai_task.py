@@ -10,6 +10,16 @@ router = APIRouter()
 
 
 @router.get(
+    "/active/storyboard/{chapter_id}",
+    summary="查询章节当前分镜任务",
+    response_model=ResponseSchema[AiTaskOut | None],
+)
+async def get_active_storyboard_task(chapter_id: int):
+    task = await ai_task_controller.get_active_storyboard_task_by_chapter(chapter_id)
+    return ResponseSchema(data=task)
+
+
+@router.get(
     "/{task_id}", summary="查询任务状态", response_model=ResponseSchema[AiTaskOut]
 )
 async def get_task(task_id: UUID):
